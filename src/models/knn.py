@@ -79,6 +79,12 @@ class KNN:
         norm_x2 = np.linalg.norm(x2)
         return 1 - (dot_product / (norm_x1 * norm_x2))  # Return distance as 1 - similarity
 
+    # Custom distance function (Mahalanobis distance)
+    def mahalanobis_distance(self, x1, x2, cov_matrix):
+        diff = x1 - x2
+        inv_cov_matrix = np.linalg.inv(cov_matrix)
+        return np.sqrt(np.dot(np.dot(diff.T, inv_cov_matrix), diff))
+
 model = KNN(k=5, metric='euclidean', voting_strategy='majority')
 X = np.array([[1, 2], [2, 3], [3, 4], [5, 6], [7, 8]])
 y = np.array([0, 0, 1, 1, 1])
