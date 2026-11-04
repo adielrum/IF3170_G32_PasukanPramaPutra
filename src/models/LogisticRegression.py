@@ -41,10 +41,12 @@ class LogisticRegression:
         accuracy = np.mean(y_pred == y)
         return accuracy
 
-X = np.array([[1, 2], [2, 3], [3, 4], [4, 5]])
-y = np.array([0, 0, 1, 2])
-model = LogisticRegression(learning_rate=0.1, num_iterations=1000)
-model.fit(X, y)
-model.evaluate(X, y)
-X_test = np.array([[1, 2], [2, 3], [3, 4], [4, 5]])
-print(model.predict(X_test))
+if __name__ == '__main__':
+    X = np.array([[1, 2], [2, 3], [3, 4], [4, 5]])
+    y = np.array([0, 0, 1, 2])
+    model = LogisticRegression(learning_rate=0.1, num_iterations=1000)
+    model.fit(X, y)
+    print("Train acc:", model.evaluate(X, y))
+    X_test = np.array([[1, 2], [2, 3], [3, 4], [4, 5]])
+    print(model.predict(X_test))
+

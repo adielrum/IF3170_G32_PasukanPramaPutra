@@ -19,8 +19,14 @@ class DecisionTree:
         unique_labels = np.unique(y)
 
         # Stopping criteria
-        if len(unique_labels) == 1 or num_samples < self.min_samples_split or (self.max_depth is not None and depth >= self.max_depth):
+        if num_samples == 0:
+            return 0
+        if len(unique_labels) == 0:
+            return 0
+        if len(unique_labels) == 1:
             return unique_labels[0]
+        if num_samples < self.min_samples_split or (self.max_depth is not None and depth >= self.max_depth):
+            return np.bincount(y).argmax()
 
         # Find the best split
         best_feature, best_threshold = self._best_split(X, y)
@@ -38,7 +44,7 @@ class DecisionTree:
 
     def _best_split(self, X, y):
         num_samples, num_features = X.shape
-        best_gain = -1
+        best_gain = 0.0
         best_feature = None
         best_threshold = None
 
@@ -100,11 +106,12 @@ class DecisionTree:
         self.print_tree(left_subtree, depth + 1)
         self.print_tree(right_subtree, depth + 1)
 
-model = DecisionTree(max_depth=3)
-X = np.array([[2, 3, 4, 5], [1, 2, 3, 4], [3, 4, 5, 6], [5, 6, 7, 8], [7, 8, 9, 10]])
-y = np.array([0, 0, 1, 1, 1])
-model.fit(X, y)
-X_test = np.array([[3, 2], [5, 2]])
-predictions = model.predict(X_test)
-print(predictions)  # Output: [0 1]
-model.print_tree()
+if __name__ == '__main__':
+    model = DecisionTree(max_depth=3)
+    X = np.array([[2, 3, 4, 5], [1, 2, 3, 4], [3, 4, 5, 6], [5, 6, 7, 8], [7, 8, 9, 10]])
+    y = np.array([0, 0, 1, 1, 1])
+    model.fit(X, y)
+    X_test = np.array([[3, 2, 1, 0], [5, 2, 4, 3]])
+    predictions = model.predict(X_test)
+    print(predictions)
+    model.print_tree()

@@ -31,7 +31,21 @@ class KNN:
         self.y_train = y
 
     def predict(self, X):
+        X = np.asarray(X)
         predictions = []
+
+        # Fast vectorized path for euclidean distance
+        if self.metric == self.euclidean_distance and isinstance(self.X_train, np.ndarray):
+            for x in X:
+                distances = np.linalg.norm(self.X_train - x, axis=1)
+                k_indices = np.argpartition(distances, self.k)[:self.k]
+                k_indices = k_indices[np.argsort(distances[k_indices])]
+                k_nearest_labels = [(self.y_train[i], distances[i]) for i in k_indices]
+                predicted_label = self.vote(k_nearest_labels)
+                predictions.append(predicted_label)
+            return np.array(predictions)
+
+        # Fallback loop for arbitrary custom distance metrics
         for x in X:
             distances = [self.metric(x, x_train) for x_train in self.X_train]
             k_indices = np.argsort(distances)[:self.k]
@@ -85,10 +99,11 @@ class KNN:
         inv_cov_matrix = np.linalg.inv(cov_matrix)
         return np.sqrt(np.dot(np.dot(diff.T, inv_cov_matrix), diff))
 
-model = KNN(k=5, metric='euclidean', voting_strategy='majority')
-X = np.array([[1, 2], [2, 3], [3, 4], [5, 6], [7, 8]])
-y = np.array([0, 0, 1, 1, 1])
-model.fit(X, y)
-X_test = np.array([[2, 2], [6, 7]])
-predictions = model.predict(X_test)
-print(predictions)  # Output: [0 1]
+if __name__ == '__main__':
+    model = KNN(k=5, metric='euclidean', voting_strategy='majority')
+    X = np.array([[1, 2], [2, 3], [3, 4], [5, 6], [7, 8]])
+    y = np.array([0, 0, 1, 1, 1])
+    model.fit(X, y)
+    X_test = np.array([[2, 2], [6, 7]])
+    predictions = model.predict(X_test)
+    print(predictions)  # Output: [0 1]
