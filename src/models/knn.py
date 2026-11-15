@@ -1,109 +1,96 @@
 import numpy as np
+try:
+    from .base import BaseModel
+except ImportError:
+    from base import BaseModel
 
-class KNN:
-    def __init__(self, k=3, metric='euclidean', voting_strategy='majority'):
+class KNN(BaseModel):
+    def __init__(self, k=3, metric='euclidean', voting_strategy='majority', p=3):
+
         self.k = k
+        self.p = p
+
+        if metric in ['euclidean', 'manhattan', 'minkowski', 'cosine']:
+            self.metric = metric
+        else:
+            raise ValueError("Invalid metric.")
+        
+        if voting_strategy in ['majority', 'weighted']:
+            self.voting_strategy = voting_strategy
+        else:
+            raise ValueError("Invalid voting strategy.")
+        
         self.X_train = None
         self.y_train = None
-        self.metric = None
-        self.vote = None
+        self.classes = None
 
-        if metric == 'euclidean':
-            self.metric = self.euclidean_distance
-        elif metric == 'manhattan':
-            self.metric = self.manhattan_distance
-        elif metric == 'minkowski':
-            self.metric = self.minkowski_distance
-        elif metric == 'cosine':
-            self.metric = self.cosine_similarity
-        else:
-            raise ValueError("Invalid distance metric")
-        
-        if voting_strategy == 'majority':
-            self.vote = self.majority_vote
-        elif voting_strategy == 'weighted':
-            self.vote = self.weighted_vote
-        else:
-            raise ValueError("Invalid voting strategy")
-
-    def fit(self, X, y):
-        self.X_train = X
-        self.y_train = y
+    def fit(self, X, y):    
+        self.X_train = np.asarray(X, dtype=np.float64)
+        self.y_train = np.asarray(y)
+        self.classes = np.unique(self.y_train)
 
     def predict(self, X):
-        X = np.asarray(X)
-        predictions = []
+        if self.X_train is None or self.y_train is None or self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+        
+        probs = self.predict_proba(X)
+        return self.classes[np.argmax(probs, axis=1)]
 
-        # Fast vectorized path for euclidean distance
-        if self.metric == self.euclidean_distance and isinstance(self.X_train, np.ndarray):
-            for x in X:
-                distances = np.linalg.norm(self.X_train - x, axis=1)
-                k_indices = np.argpartition(distances, self.k)[:self.k]
-                k_indices = k_indices[np.argsort(distances[k_indices])]
-                k_nearest_labels = [(self.y_train[i], distances[i]) for i in k_indices]
-                predicted_label = self.vote(k_nearest_labels)
-                predictions.append(predicted_label)
-            return np.array(predictions)
+    def predict_proba(self, X):
+        if self.X_train is None or self.y_train is None or self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
 
-        # Fallback loop for arbitrary custom distance metrics
-        for x in X:
-            distances = [self.metric(x, x_train) for x_train in self.X_train]
-            k_indices = np.argsort(distances)[:self.k]
-            k_nearest_labels = [(self.y_train[i], distances[i]) for i in k_indices]
-            predicted_label = self.vote(k_nearest_labels)
-            predictions.append(predicted_label)
-        return np.array(predictions)
+        X = np.asarray(X, dtype=np.float64)
+        probs = np.zeros((len(X), len(self.classes)))
 
-    # Voting Strategies
+        for i, x in enumerate(X):
+            distances = self._compute_distances(x)
+            
+            k_indices = np.argpartition(distances, self.k)[:self.k]
+            k_labels = self.y_train[k_indices]
+            k_distances = distances[k_indices]
+            
+            scores = self._vote(k_labels, k_distances)
+            probs[i] = scores / np.sum(scores)
+        
+        return probs
 
-    # Majority Voting
-    def majority_vote(self, k_nearest_labels):
-        labels = [label for label, _ in k_nearest_labels]
-        return max(set(labels), key=labels.count)
+    def _compute_distances(self, x):
+        if self.X_train is None:
+            raise ValueError("Model has not been fitted yet.")
+        
+        match self.metric:
 
-    # Weighted Voting
-    def weighted_vote(self, k_nearest_labels):
-        label_weights = {}
-        for label, distance in k_nearest_labels:
-            weight = 1 / (distance + 1e-5)  # Avoid division by zero
-            if label in label_weights:
-                label_weights[label] += weight
-            else:
-                label_weights[label] = weight
-        return max(label_weights, key=label_weights.get)
+            case 'euclidean':
+                return np.linalg.norm(self.X_train - x, ord=2, axis=1)
+            
+            case 'manhattan':
+                return np.linalg.norm(self.X_train - x, ord=1, axis=1)
+            
+            case 'minkowski':
+                return np.linalg.norm(self.X_train - x, ord=self.p, axis=1)
+            
+            case 'cosine':
+                dot = np.dot(self.X_train, x) 
+                norm_train = np.linalg.norm(self.X_train, axis=1) 
+                norm_x = np.linalg.norm(x)
+                return 1.0 - (dot / (norm_train * norm_x + 1e-9))
 
-    # Custom Distance Metrics
+            case _:
+                raise ValueError("Invalid metric.")
+    
+    def _vote(self, k_labels, k_distances):
+        if self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+        
+        match self.voting_strategy:
 
-    # Custom distance function (Euclidean distance)
-    def euclidean_distance(self, x1, x2):
-        return np.sqrt(np.sum((x1 - x2) ** 2))
+            case 'majority':
+                return np.bincount(k_labels, minlength=len(self.classes))
+            
+            case 'weighted':
+                weights = 1.0 / (k_distances + 1e-6)
+                return np.bincount(k_labels, weights=weights, minlength=len(self.classes))
 
-    # Custom distance function (Manhattan distance)
-    def manhattan_distance(self, x1, x2):
-        return np.sum(np.abs(x1 - x2))
-
-    # Custom distance function (Minkowski distance)
-    def minkowski_distance(self, x1, x2, p=3):
-        return np.sum(np.abs(x1 - x2) ** p) ** (1 / p)
-
-    # Custom distance function (Cosine similarity)
-    def cosine_similarity(self, x1, x2):
-        dot_product = np.dot(x1, x2)
-        norm_x1 = np.linalg.norm(x1)
-        norm_x2 = np.linalg.norm(x2)
-        return 1 - (dot_product / (norm_x1 * norm_x2))  # Return distance as 1 - similarity
-
-    # Custom distance function (Mahalanobis distance)
-    def mahalanobis_distance(self, x1, x2, cov_matrix):
-        diff = x1 - x2
-        inv_cov_matrix = np.linalg.inv(cov_matrix)
-        return np.sqrt(np.dot(np.dot(diff.T, inv_cov_matrix), diff))
-
-if __name__ == '__main__':
-    model = KNN(k=5, metric='euclidean', voting_strategy='majority')
-    X = np.array([[1, 2], [2, 3], [3, 4], [5, 6], [7, 8]])
-    y = np.array([0, 0, 1, 1, 1])
-    model.fit(X, y)
-    X_test = np.array([[2, 2], [6, 7]])
-    predictions = model.predict(X_test)
-    print(predictions)  # Output: [0 1]
+            case _:
+                raise ValueError("Invalid voting strategy.")
