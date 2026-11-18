@@ -1,5 +1,7 @@
 import numpy as np
 import numbers
+import os
+import matplotlib.pyplot as plt
 try:
     from .base import BaseModel
 except ImportError:
@@ -48,68 +50,6 @@ class DecisionTree(BaseModel):
         self.root = None
         self.classes = None
         self.categories = {}
-
-    def fit(self, X, y):
-        X = np.asarray(X, dtype=object)
-        y = np.asarray(y)
-
-        self.classes, y_indices = np.unique(y, return_inverse=True)
-        self.categories = self._infer_feature_types(X)
-
-        initial_weights = np.ones(len(y_indices), dtype=float)
-        self.root = self._build_tree(X, y_indices, initial_weights, depth=0)
-
-        return self
-
-    def _marginal_child_proba(self, sample, node):
-        if self.classes is None:
-            raise ValueError("Model has not been fitted yet.")
-        
-        total_probs = np.zeros(len(self.classes), dtype=float)
-        for child_key, child_node in node.children.items():
-            p_child = node.children_probs[child_key]
-            if p_child > 0:
-                total_probs += p_child * self._predict_sample_proba(sample, child_node)
-        return total_probs 
-
-    def _predict_sample_proba(self, sample, node):
-        if node.is_leaf:
-            return node.probs
-
-        val = sample[node.feature]
-
-        # Missing value 
-        if self._is_null_value(val):
-            return self._marginal_child_proba(sample, node) 
-
-        # Continuous split 
-        if node.threshold is not None:
-            child_key = "left" if float(val) < node.threshold else "right"
-            return self._predict_sample_proba(sample, node.children[child_key])
-
-        # Categorical split 
-        if val in node.children:
-            return self._predict_sample_proba(sample, node.children[val])
-
-        # Fallback
-        return self._marginal_child_proba(sample, node)
-
-    def predict_proba(self, X):
-        if self.root is None or self.classes is None:
-            raise ValueError("Model has not been fitted yet.")
-
-        X = np.asarray(X, dtype=object)
-        if len(X) == 0:
-            return np.empty((0, len(self.classes)), dtype=float)
-
-        return np.array([self._predict_sample_proba(sample, self.root) for sample in X], dtype=float)
-
-    def predict(self, X):
-        if self.classes is None:
-            raise ValueError("Model has not been fitted yet.")
-        
-        proba = self.predict_proba(X)
-        return self.classes[np.argmax(proba, axis=1)]
     
     @staticmethod
     def _is_null_value(x):
@@ -343,6 +283,68 @@ class DecisionTree(BaseModel):
 
         return best_feature, best_threshold
 
+    def fit(self, X, y):
+        X = np.asarray(X, dtype=object)
+        y = np.asarray(y)
+
+        self.classes, y_indices = np.unique(y, return_inverse=True)
+        self.categories = self._infer_feature_types(X)
+
+        initial_weights = np.ones(len(y_indices), dtype=float)
+        self.root = self._build_tree(X, y_indices, initial_weights, depth=0)
+
+        return self
+
+    def predict_proba(self, X):
+        if self.root is None or self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+
+        X = np.asarray(X, dtype=object)
+        if len(X) == 0:
+            return np.empty((0, len(self.classes)), dtype=float)
+
+        return np.array([self._predict_sample_proba(sample, self.root) for sample in X], dtype=float)
+
+    def predict(self, X):
+        if self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+        
+        proba = self.predict_proba(X)
+        return self.classes[np.argmax(proba, axis=1)]
+
+    def _marginal_child_proba(self, sample, node):
+        if self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+        
+        total_probs = np.zeros(len(self.classes), dtype=float)
+        for child_key, child_node in node.children.items():
+            p_child = node.children_probs[child_key]
+            if p_child > 0:
+                total_probs += p_child * self._predict_sample_proba(sample, child_node)
+        return total_probs 
+
+    def _predict_sample_proba(self, sample, node):
+        if node.is_leaf:
+            return node.probs
+
+        val = sample[node.feature]
+
+        # Missing value 
+        if self._is_null_value(val):
+            return self._marginal_child_proba(sample, node) 
+
+        # Continuous split 
+        if node.threshold is not None:
+            child_key = "left" if float(val) < node.threshold else "right"
+            return self._predict_sample_proba(sample, node.children[child_key])
+
+        # Categorical split 
+        if val in node.children:
+            return self._predict_sample_proba(sample, node.children[val])
+
+        # Fallback
+        return self._marginal_child_proba(sample, node)
+
     def __str__(self):
         return self._print_tree(self.root)
 
@@ -361,6 +363,51 @@ class DecisionTree(BaseModel):
 
         return result
 
+    def visualize(self, filename="decision_tree", save_to_file=False):
+            if self.root is None:
+                raise ValueError("Model has not been fitted yet.")
+    
+            positions = {}
+            num_leaves, max_depth = self._compute_tree_layout(self.root, positions=positions)
+    
+            fig_width = max(8.0, num_leaves * 2.6)
+            fig_height = max(5.0, (max_depth + 1) * 2.3)
+    
+            rc_style = {
+                "font.family": ["Arial", "sans-serif"],
+                "font.size": 11,
+                "axes.spines.right": False,
+                "axes.spines.top": False,
+                "axes.linewidth": 2.0,
+                "legend.frameon": False,
+                "svg.fonttype": "none",
+            }
+    
+            with plt.rc_context(rc_style):
+                fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+                ax.set_axis_off()
+                ax.set_xlim(-0.7, max(0.7, (num_leaves - 1) + 0.7))
+                ax.set_ylim(-0.6, max(0.6, max_depth + 0.6))
+    
+                self._draw_tree_nodes(ax, self.root, positions, max_depth)
+                fig.tight_layout(pad=1.5)
+    
+                if save_to_file:
+                    base, ext = os.path.splitext(filename)
+                    parent_dir = os.path.dirname(filename)
+                    if parent_dir:
+                        os.makedirs(parent_dir, exist_ok=True)
+    
+                    if ext:
+                        fig.savefig(filename, dpi=300, bbox_inches="tight", pad_inches=0.2)
+                        if ext.lower() != ".png":
+                            fig.savefig(f"{base}.png", dpi=300, bbox_inches="tight", pad_inches=0.2)
+                    else:
+                        fig.savefig(f"{base}.png", dpi=300, bbox_inches="tight", pad_inches=0.2)
+    
+                plt.close(fig)
+                return fig
+
     def _compute_tree_layout(self, node, depth=0, next_leaf_x=0, positions=None):
         if positions is None:
             positions = {}
@@ -378,7 +425,6 @@ class DecisionTree(BaseModel):
             child_xs.append(positions[id(child_node)][0])
             max_depth = max(max_depth, child_max_depth)
 
-        # Center internal node over the span of its leftmost and rightmost children.
         positions[id(node)] = (0.5 * (child_xs[0] + child_xs[-1]), depth)
         return next_leaf_x, max_depth
 
@@ -393,7 +439,7 @@ class DecisionTree(BaseModel):
     def _format_edge_label(node, child_key):
         prob = node.children_probs[child_key]
         if node.threshold is not None:
-            op = "<" if child_key == "left" else ">="
+            op = "<" if child_key == "left" else "≥"
             cond = f"{op} {node.threshold:.4g}"
         else:
             cond = f"= {child_key}"
@@ -410,8 +456,7 @@ class DecisionTree(BaseModel):
                 cy = max_depth - cdepth
 
                 ax.plot([nx, cx], [ny, cy], color="#4D4D4D", linewidth=1.8, zorder=1)
-
-                # Stagger multi-way edge labels slightly lower where branches fan wider.
+                
                 t = 0.55 if num_children <= 2 else (0.50 if idx % 2 == 0 else 0.68)
                 lx = nx + t * (cx - nx)
                 ly = ny + t * (cy - ny)
@@ -450,96 +495,3 @@ class DecisionTree(BaseModel):
             bbox=bbox,
             zorder=3,
         )
-
-    def visualize(self, filename="decision_tree", is_save=False):
-        if self.root is None:
-            raise ValueError("Model has not been fitted yet.")
-
-        import os
-        import matplotlib.pyplot as plt
-
-        positions = {}
-        num_leaves, max_depth = self._compute_tree_layout(self.root, positions=positions)
-
-        fig_width = max(8.0, num_leaves * 2.6)
-        fig_height = max(5.0, (max_depth + 1) * 2.3)
-
-        rc_style = {
-            "font.family": ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"],
-            "font.size": 11,
-            "axes.spines.right": False,
-            "axes.spines.top": False,
-            "axes.linewidth": 2.0,
-            "legend.frameon": False,
-            "svg.fonttype": "none",
-        }
-
-        with plt.rc_context(rc_style):
-            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-            ax.set_axis_off()
-            ax.set_xlim(-0.7, max(0.7, (num_leaves - 1) + 0.7))
-            ax.set_ylim(-0.6, max(0.6, max_depth + 0.6))
-
-            self._draw_tree_nodes(ax, self.root, positions, max_depth)
-            fig.tight_layout(pad=1.5)
-
-            if is_save:
-                base, ext = os.path.splitext(filename)
-                parent_dir = os.path.dirname(filename)
-                if parent_dir:
-                    os.makedirs(parent_dir, exist_ok=True)
-
-                if ext:
-                    fig.savefig(filename, dpi=300, bbox_inches="tight", pad_inches=0.2)
-                    if ext.lower() != ".png":
-                        fig.savefig(f"{base}.png", dpi=300, bbox_inches="tight", pad_inches=0.2)
-                    if ext.lower() != ".pdf":
-                        fig.savefig(f"{base}.pdf", dpi=300, bbox_inches="tight", pad_inches=0.2)
-                else:
-                    fig.savefig(f"{base}.png", dpi=300, bbox_inches="tight", pad_inches=0.2)
-                    fig.savefig(f"{base}.pdf", dpi=300, bbox_inches="tight", pad_inches=0.2)
-
-            plt.close(fig)
-            return fig
-
-
-# Generate synthetic dataset for testing containing both numerical and categorical features, including missing values
-if __name__ == "__main__":
-    import pandas as pd
-
-    # Create a synthetic dataset
-    data = {
-        'feature_num': [1.0, 2.5, np.nan, 4.0, 5.5, 6.0, np.nan, 8.0],
-        'feature_cat': ['A', 'B', 'A', np.nan, 'B', 'C', 'C', 'A'],
-        'target': ['yes', 'no', 'yes', 'no', 'yes', 'no', 'yes', 'no']
-    }
-
-    df = pd.DataFrame(data)
-
-    # Separate features and target
-    X = df[['feature_num', 'feature_cat']].values
-    y = df['target'].values
-
-    # Initialize and fit the DecisionTree model
-    dt_model = DecisionTree(criterion='entropy', use_gain_ratio=True, max_depth=3)
-    dt_model.fit(X, y)
-
-    # Print the tree structure
-    print(dt_model)
-
-    # Test predictions on new samples
-    test_samples = np.array([
-        [3.0, 'A'],
-        [np.nan, 'B'],
-        [7.0, np.nan],
-        [5.0, 'C']
-    ], dtype=object)
-
-    predictions = dt_model.predict(test_samples)
-    probabilities = dt_model.predict_proba(test_samples)
-
-    print("Predictions:", predictions)
-    print("Probabilities:\n", probabilities)
-
-    # isualize the decision tree
-    dt_model.visualize(filename="synthetic_decision_tree", is_save=True)
