@@ -343,20 +343,203 @@ class DecisionTree(BaseModel):
 
         return best_feature, best_threshold
 
-    def __str__(self, node, depth=0):
-        indent = "  " * depth
+    def __str__(self):
+        return self._print_tree(self.root)
+
+    def _print_tree(self, node, depth=0):
         if node.is_leaf:
-            print(f"{indent}Leaf: value={node.value}, probs={node.probs}")
+            return f"{'|   ' * depth}Leaf: {node.value}, Probs: {node.probs}\n"
+
+        result = f"{'|   ' * depth}Feature {node.feature}"
+        if node.threshold is not None:
+            result += f" < {node.threshold}"
+        result += "\n"
+
+        for child_key, child_node in node.children.items():
+            result += f"{'|   ' * (depth + 1)}Child '{child_key}' (Prob: {node.children_probs[child_key]}):\n"
+            result += self._print_tree(child_node, depth + 2)
+
+        return result
+
+    def _compute_tree_layout(self, node, depth=0, next_leaf_x=0, positions=None):
+        if positions is None:
+            positions = {}
+
+        if node.is_leaf or not node.children:
+            positions[id(node)] = (float(next_leaf_x), depth)
+            return next_leaf_x + 1, depth
+
+        child_xs = []
+        max_depth = depth
+        for child_node in node.children.values():
+            next_leaf_x, child_max_depth = self._compute_tree_layout(
+                child_node, depth + 1, next_leaf_x, positions
+            )
+            child_xs.append(positions[id(child_node)][0])
+            max_depth = max(max_depth, child_max_depth)
+
+        # Center internal node over the span of its leftmost and rightmost children.
+        positions[id(node)] = (0.5 * (child_xs[0] + child_xs[-1]), depth)
+        return next_leaf_x, max_depth
+
+    def _format_leaf_label(self, node):
+        if self.classes is not None and node.probs is not None:
+            prob_parts = [f"{cls}: {prob:.2f}" for cls, prob in zip(self.classes, node.probs)]
+            lines = [", ".join(prob_parts[i:i + 2]) for i in range(0, len(prob_parts), 2)]
+            return f"Leaf: {node.value}\n" + "\n".join(lines)
+        return f"Leaf: {node.value}"
+
+    @staticmethod
+    def _format_edge_label(node, child_key):
+        prob = node.children_probs[child_key]
+        if node.threshold is not None:
+            op = "<" if child_key == "left" else ">="
+            cond = f"{op} {node.threshold:.4g}"
         else:
-            print(f"{indent}Node: feature={node.feature}, threshold={node.threshold}, children_probs={node.children_probs}")
-            for child_key, child_node in node.children.items():
-                print(f"{indent}  Child key: {child_key}")
-                self._print_tree(child_node, depth + 2)
+            cond = f"= {child_key}"
+        return f"{cond}\n(p={prob:.2f})"
+
+    def _draw_tree_nodes(self, ax, node, positions, max_depth):
+        nx, ndepth = positions[id(node)]
+        ny = max_depth - ndepth
+
+        if not node.is_leaf and node.children:
+            num_children = len(node.children)
+            for idx, (child_key, child_node) in enumerate(node.children.items()):
+                cx, cdepth = positions[id(child_node)]
+                cy = max_depth - cdepth
+
+                ax.plot([nx, cx], [ny, cy], color="#4D4D4D", linewidth=1.8, zorder=1)
+
+                # Stagger multi-way edge labels slightly lower where branches fan wider.
+                t = 0.55 if num_children <= 2 else (0.50 if idx % 2 == 0 else 0.68)
+                lx = nx + t * (cx - nx)
+                ly = ny + t * (cy - ny)
+                ax.text(
+                    lx,
+                    ly,
+                    self._format_edge_label(node, child_key),
+                    ha="center",
+                    va="center",
+                    fontsize=9.5,
+                    color="#272727",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.92),
+                    zorder=2,
+                )
+
+                self._draw_tree_nodes(ax, child_node, positions, max_depth)
+
+        if node.is_leaf:
+            label = self._format_leaf_label(node)
+            bbox = dict(boxstyle="round,pad=0.45", facecolor="#DDF3DE", edgecolor="#42949E", linewidth=1.8)
+            weight = "normal"
+        else:
+            label = f"Feature {node.feature}"
+            bbox = dict(boxstyle="round,pad=0.45", facecolor="#EEF4FB", edgecolor="#0F4D92", linewidth=2.0)
+            weight = "bold"
+
+        ax.text(
+            nx,
+            ny,
+            label,
+            ha="center",
+            va="center",
+            fontsize=10.5,
+            fontweight=weight,
+            color="#272727",
+            bbox=bbox,
+            zorder=3,
+        )
+
+    def visualize(self, filename="decision_tree", is_save=False):
+        if self.root is None:
+            raise ValueError("Model has not been fitted yet.")
+
+        import os
+        import matplotlib.pyplot as plt
+
+        positions = {}
+        num_leaves, max_depth = self._compute_tree_layout(self.root, positions=positions)
+
+        fig_width = max(8.0, num_leaves * 2.6)
+        fig_height = max(5.0, (max_depth + 1) * 2.3)
+
+        rc_style = {
+            "font.family": ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"],
+            "font.size": 11,
+            "axes.spines.right": False,
+            "axes.spines.top": False,
+            "axes.linewidth": 2.0,
+            "legend.frameon": False,
+            "svg.fonttype": "none",
+        }
+
+        with plt.rc_context(rc_style):
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            ax.set_axis_off()
+            ax.set_xlim(-0.7, max(0.7, (num_leaves - 1) + 0.7))
+            ax.set_ylim(-0.6, max(0.6, max_depth + 0.6))
+
+            self._draw_tree_nodes(ax, self.root, positions, max_depth)
+            fig.tight_layout(pad=1.5)
+
+            if is_save:
+                base, ext = os.path.splitext(filename)
+                parent_dir = os.path.dirname(filename)
+                if parent_dir:
+                    os.makedirs(parent_dir, exist_ok=True)
+
+                if ext:
+                    fig.savefig(filename, dpi=300, bbox_inches="tight", pad_inches=0.2)
+                    if ext.lower() != ".png":
+                        fig.savefig(f"{base}.png", dpi=300, bbox_inches="tight", pad_inches=0.2)
+                    if ext.lower() != ".pdf":
+                        fig.savefig(f"{base}.pdf", dpi=300, bbox_inches="tight", pad_inches=0.2)
+                else:
+                    fig.savefig(f"{base}.png", dpi=300, bbox_inches="tight", pad_inches=0.2)
+                    fig.savefig(f"{base}.pdf", dpi=300, bbox_inches="tight", pad_inches=0.2)
+
+            plt.close(fig)
+            return fig
 
 
-X = np.array([[1, 2], [2, 3], [3, 4], [4, 5]])
-y = np.array([0, 0, 1, 1])
-model = DecisionTree(criterion="entropy", use_gain_ratio=True, max_depth=3, min_samples_split=2)
-model.fit(X, y)
-print("Train acc:", np.mean(model.predict(X) == y))
-print(model)
+# Generate synthetic dataset for testing containing both numerical and categorical features, including missing values
+if __name__ == "__main__":
+    import pandas as pd
+
+    # Create a synthetic dataset
+    data = {
+        'feature_num': [1.0, 2.5, np.nan, 4.0, 5.5, 6.0, np.nan, 8.0],
+        'feature_cat': ['A', 'B', 'A', np.nan, 'B', 'C', 'C', 'A'],
+        'target': ['yes', 'no', 'yes', 'no', 'yes', 'no', 'yes', 'no']
+    }
+
+    df = pd.DataFrame(data)
+
+    # Separate features and target
+    X = df[['feature_num', 'feature_cat']].values
+    y = df['target'].values
+
+    # Initialize and fit the DecisionTree model
+    dt_model = DecisionTree(criterion='entropy', use_gain_ratio=True, max_depth=3)
+    dt_model.fit(X, y)
+
+    # Print the tree structure
+    print(dt_model)
+
+    # Test predictions on new samples
+    test_samples = np.array([
+        [3.0, 'A'],
+        [np.nan, 'B'],
+        [7.0, np.nan],
+        [5.0, 'C']
+    ], dtype=object)
+
+    predictions = dt_model.predict(test_samples)
+    probabilities = dt_model.predict_proba(test_samples)
+
+    print("Predictions:", predictions)
+    print("Probabilities:\n", probabilities)
+
+    # isualize the decision tree
+    dt_model.visualize(filename="synthetic_decision_tree", is_save=True)
