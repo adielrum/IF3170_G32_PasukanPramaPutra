@@ -342,3 +342,21 @@ class DecisionTree(BaseModel):
                 best_threshold = threshold
 
         return best_feature, best_threshold
+
+    def __str__(self, node, depth=0):
+        indent = "  " * depth
+        if node.is_leaf:
+            print(f"{indent}Leaf: value={node.value}, probs={node.probs}")
+        else:
+            print(f"{indent}Node: feature={node.feature}, threshold={node.threshold}, children_probs={node.children_probs}")
+            for child_key, child_node in node.children.items():
+                print(f"{indent}  Child key: {child_key}")
+                self._print_tree(child_node, depth + 2)
+
+
+X = np.array([[1, 2], [2, 3], [3, 4], [4, 5]])
+y = np.array([0, 0, 1, 1])
+model = DecisionTree(criterion="entropy", use_gain_ratio=True, max_depth=3, min_samples_split=2)
+model.fit(X, y)
+print("Train acc:", np.mean(model.predict(X) == y))
+print(model)
