@@ -3,13 +3,13 @@ import joblib
 
 class BaseModel:
    def fit(self, X, y):
-      raise NotImplementedError(f"{self.__class__.__name__} must implement fit()")
+      raise NotImplementedError(f"{self.__class__.__name__} does not implement fit()")
    
    def predict(self, X):
-      raise NotImplementedError(f"{self.__class__.__name__} must implement predict()")
+      raise NotImplementedError(f"{self.__class__.__name__} does not implement predict()")
    
    def predict_proba(self, X):
-      raise NotImplementedError(f"{self.__class__.__name__} must implement predict_proba()")
+      raise NotImplementedError(f"{self.__class__.__name__} does not implement predict_proba()")
 
    def save(self, filepath):
       directory = os.path.dirname(filepath)

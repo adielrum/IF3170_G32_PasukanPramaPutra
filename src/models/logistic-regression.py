@@ -46,7 +46,7 @@ class LogisticRegression(BaseModel):
         rng = np.random.default_rng(self.random_state)
 
         if self.batch_size is None:
-            batch_size = 1
+            batch_size = num_samples
         elif self.batch_size >= num_samples:
             batch_size = num_samples
         elif self.batch_size <= 0:
@@ -67,20 +67,17 @@ class LogisticRegression(BaseModel):
             X_shuffled = X[indices]
             y_shuffled = y_reshaped[indices]
 
-            y_predicted = self.predict_proba(X)
-
             # Mini-Batch Gradient Descent 
-            for start_idx in range(0, num_samples, batch_size):
-                end_idx = start_idx + batch_size
-                X_batch = X_shuffled[start_idx:end_idx]
-                y_batch = y_shuffled[start_idx:end_idx]
+            for j in range(0, num_samples, batch_size):
+                X_batch = X_shuffled[j:j+batch_size]
+                y_batch = y_shuffled[j:j+batch_size]
                 current_batch_size = len(X_batch)
 
                 y_predicted = self.predict_proba(X_batch)
 
                 # Gradients: https://dsplog.com/2025/06/22/gradients-for-multi-class-classification-with-softmax/#gsc.tab=0 
-                dw = (1 / current_batch_size) * (X_batch.T @ (y_predicted - y_batch)) # 1/N * Xᵀ * (y - ŷ)
-                db = (1 / current_batch_size) * np.sum(y_predicted - y_batch, axis=0) # 1/N * 1ᵀ * (y - ŷ)
+                dw = (1 / current_batch_size) * (X_batch.T @ (y_predicted - y_batch)) # 1/N * Xᵀ * (ŷ - y)
+                db = (1 / current_batch_size) * np.sum(y_predicted - y_batch, axis=0) # 1/N * 1ᵀ * (ŷ - y)
 
                 # Regularization : https://mbrenndoerfer.com/writing/elastic-net-regularization-complete-guide-mathematical-foundations-python-implementation
                 dl1 = self.l1_lambda * np.sign(self.weights) # L1  
@@ -88,3 +85,5 @@ class LogisticRegression(BaseModel):
 
                 self.weights -= self.learning_rate * (dw + dl1 + dl2) 
                 self.bias -= self.learning_rate * db
+
+        return self

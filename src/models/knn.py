@@ -15,7 +15,7 @@ class KNN(BaseModel):
         else:
             raise ValueError(f"Invalid metric: {metric}.")
         
-        if voting_strategy in ['majority', 'weighted']:
+        if voting_strategy in ['majority', 'distance']:
             self.voting_strategy = voting_strategy
         else:
             raise ValueError(f"Invalid voting strategy: {voting_strategy}.")
@@ -96,7 +96,7 @@ class KNN(BaseModel):
             case 'majority':
                 return np.bincount(k_labels, minlength=len(self.classes))
             
-            case 'weighted':
+            case 'distance':
                 weights = 1.0 / (k_distances + 1e-9)
                 return np.bincount(k_labels, weights=weights, minlength=len(self.classes))
 
