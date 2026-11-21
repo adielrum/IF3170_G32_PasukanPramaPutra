@@ -34,6 +34,7 @@ class DecisionTree(BaseModel):
         self,
         criterion="entropy",
         use_gain_ratio=True,
+        *, 
         max_depth=100,
         min_samples_split=2,
         min_samples_leaf=1,
@@ -54,8 +55,18 @@ class DecisionTree(BaseModel):
         self.categories = {}
 
     def fit(self, X, y):
+
+        # Convert categorical_features to indices
+        if hasattr(X, 'columns') and self.categorical_features:
+            col_list = list(X.columns)
+            self.categorical_features = [
+                col_list.index(c) if isinstance(c, str) else c 
+                for c in self.categorical_features
+            ]
+
+        # 
         X_clean, is_num = self._prepare_X(X) 
-        self._is_numeric_matrix = is_num 
+        self.all_numeric_features = is_num 
         y = np.asarray(y)
 
         self.classes, y_indices = np.unique(y, return_inverse=True)
@@ -76,18 +87,28 @@ class DecisionTree(BaseModel):
 
     @classmethod
     def _is_null(cls, arr):
+
+        # Numeric feature 
         if np.issubdtype(arr.dtype, np.number):
             return np.isnan(arr)
-        return np.array([cls._is_null_value(x) for x in arr], dtype=bool)
+
+        # Categorical feature 
+        else: 
+            return np.array([cls._is_null_value(x) for x in arr], dtype=bool)
 
     def _prepare_X(self, X):
         X_arr = np.asarray(X)
+
+        # All numeric features 
         if np.issubdtype(X_arr.dtype, np.number) and not self.categorical_features:
             return np.ascontiguousarray(X_arr, dtype=np.float64), True
-        return np.asarray(X, dtype=object), False
+
+        # Contains categorical features 
+        else: 
+            return np.asarray(X, dtype=object), False
 
     def _infer_feature_types(self, X):
-        if self._is_numeric_matrix:
+        if self.all_numeric_features:
             return {}
         
         num_features = X.shape[1]
@@ -162,7 +183,7 @@ class DecisionTree(BaseModel):
                     f"Continuous feature {best_feature} returned threshold=None."
                 )
 
-            if self._is_numeric_matrix:
+            if self.all_numeric_features:
                 child_masks = {
                     "left": known_mask & (col < best_threshold),
                     "right": known_mask & (col >= best_threshold),
@@ -205,21 +226,23 @@ class DecisionTree(BaseModel):
             threshold=best_threshold,
         )
 
-    def _impurity_from_probs(self, probs, axis=-1):
+    def _loss_from_probs(self, probs, axis=-1):
         probs = np.asarray(probs, dtype=np.float64)
         safe_probs = np.where(probs > 0.0, probs, 1.0)
 
         match self.criterion:
             case "entropy":
                 imp = -np.sum(np.where(probs > 0.0, probs * np.log2(safe_probs), 0.0), axis=axis)
+            
             case "gini":
                 imp = 1.0 - np.sum(probs ** 2, axis=axis)
+            
             case _:
                 raise ValueError(f"Invalid criterion: {self.criterion}.")
 
         return float(imp) if np.ndim(imp) == 0 else imp
 
-    def _impurity(self, y_indices, weights):
+    def _loss(self, y_indices, weights):
         if self.classes is None:
             raise ValueError("Model has not been fitted yet.")
         
@@ -227,7 +250,7 @@ class DecisionTree(BaseModel):
         counts = np.bincount(y_indices, weights=weights, minlength=len(self.classes))
         probs = counts[counts > 0] / total_weight
 
-        return self._impurity_from_probs(probs)
+        return self._loss_from_probs(probs)
 
     def _gain(
         self,
@@ -243,7 +266,7 @@ class DecisionTree(BaseModel):
         W_tot = W_known + w_unknown
 
         # L(S)
-        parent_imp = self._impurity_from_probs(parent_probs)
+        parent_imp = self._loss_from_probs(parent_probs)
 
         # |Sᵥ|/|S| for every v
         child_weights = np.sum(child_class_weights, axis=-1)
@@ -251,7 +274,7 @@ class DecisionTree(BaseModel):
 
         # L(Sᵥ) for every v
         child_probs = child_class_weights / safe_child_weights[..., None]
-        child_imps = self._impurity_from_probs(child_probs, axis=-1) 
+        child_imps = self._loss_from_probs(child_probs, axis=-1) 
 
         # Σᵥ |Sᵥ|/|S| L(Sᵥ) 
         weighted_child_imp = np.sum((child_weights / W_known) * child_imps, axis=-1)
@@ -261,11 +284,11 @@ class DecisionTree(BaseModel):
         if not self.use_gain_ratio:
             return np.maximum(gains, 0.0)
 
-        # Split impurity 
+        # Split loss 
         p_parts = [child_weights / W_tot]
         if w_unknown > 0.0:
             p_parts.append(np.full((S, 1), w_unknown / W_tot, dtype=np.float64))
-        split_imp = self._impurity_from_probs(np.concatenate(p_parts, axis=-1), axis=-1)
+        split_imp = self._loss_from_probs(np.concatenate(p_parts, axis=-1), axis=-1)
 
         valid = (gains > 1e-12) & (split_imp > 1e-12)
         if filter_mean_gain and np.any(gains > 1e-12):
@@ -385,7 +408,7 @@ class DecisionTree(BaseModel):
             else:
                 col_known = (
                     col[known_mask]
-                    if self._is_numeric_matrix
+                    if self.all_numeric_features
                     else col[known_mask].astype(np.float64)
                 )
                 score, threshold = self._best_continuous_split(
@@ -472,7 +495,7 @@ class DecisionTree(BaseModel):
         self._predict_batch(X_clean, np.arange(n_samples), self.root, out, is_num, weight=1.0)
         return out
 
-    def __str__(self):
+    def print_tree(self):
         return self._print_tree(self.root)
 
     def _print_tree(self, node, depth=0):
@@ -490,7 +513,7 @@ class DecisionTree(BaseModel):
 
         return result
 
-    def visualize(self, filename="decision_tree", save_to_file=False):
+    def visualize_tree(self, filename="decision_tree", save_to_file=False):
             if self.root is None:
                 raise ValueError("Model has not been fitted yet.")
     
