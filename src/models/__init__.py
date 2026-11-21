@@ -3,7 +3,7 @@ from .knn import KNN
 from .decision_tree import DecisionTree, Node
 from .logistic_regression import LogisticRegression
 from .naive_bayes import NaiveBayes
-from .svm import SVC, BinarySVC
+from .svm import SVC, BinarySVC, visualize_svm_kernels
 
 SVM = SVC
 __all__ = [
@@ -16,4 +16,5 @@ __all__ = [
    "SVC",
    "BinarySVC",
    "SVM",
+   "visualize_svm_kernels",
 ]

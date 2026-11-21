@@ -21,12 +21,55 @@ References:
   pp. 415-425, 2002 (One-vs-One and One-vs-Rest strategies).
 """
 
+import os
 import numpy as np
 from collections import OrderedDict
+import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 try:
    from .base import BaseModel
 except ImportError:
    from base import BaseModel
+
+_SVM_PALETTE = {
+   "blue_main": "#0F4D92",
+   "blue_secondary": "#3775BA",
+   "red_2": "#E9A6A1",
+   "red_strong": "#B64342",
+   "highlight": "#FFD700",
+   "boundary": "#111827",
+   "bounded_sv": "#1F2937",
+}
+
+
+def _svm_style_context():
+   return plt.rc_context({
+      "font.family": ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"],
+      "font.size": 14,
+      "axes.titlesize": 14,
+      "axes.labelsize": 13,
+      "xtick.labelsize": 11,
+      "ytick.labelsize": 11,
+      "axes.spines.right": False,
+      "axes.spines.top": False,
+      "axes.linewidth": 2.0,
+      "legend.frameon": False,
+      "svg.fonttype": "none",
+   })
+
+
+def _save_figure(fig, filename, formats=("png",), dpi=300):
+   stem, ext = os.path.splitext(str(filename))
+   fmt_list = [ext.lstrip(".")] if (ext and formats is None) else list(formats)
+   if parent := os.path.dirname(stem):
+      os.makedirs(parent, exist_ok=True)
+   saved = []
+   for fmt in fmt_list:
+      clean_fmt = fmt.lstrip(".").lower()
+      out_path = f"{stem}.{clean_fmt}"
+      fig.savefig(out_path, dpi=dpi, bbox_inches="tight", pad_inches=0.08)
+      saved.append(out_path)
+   return saved
 
 class _KernelColumnCache:
    def __init__(self, max_bytes, col_bytes):
@@ -299,6 +342,217 @@ class BinarySVC(BaseModel):
       z = self.decision_function(X)
       return np.where(z >= 0, self.classes[1], self.classes[0])
 
+   def _sv_masks(self):
+      sv_tol = max(1e-7, 1e-5 * self.C)
+      free_mask = (self.alpha > sv_tol) & (self.alpha < self.C - sv_tol)
+      bounded_mask = ~free_mask
+      return free_mask, bounded_mask
+
+   def _legend_handles(self, class_names, distinguish_sv=True):
+      handles = [
+         mlines.Line2D([], [], linestyle="None", marker="o", markersize=8,
+                       markerfacecolor=_SVM_PALETTE["blue_main"], markeredgecolor="white",
+                       markeredgewidth=0.8, label=str(class_names[0])),
+         mlines.Line2D([], [], linestyle="None", marker="o", markersize=8,
+                       markerfacecolor=_SVM_PALETTE["red_strong"], markeredgecolor="white",
+                       markeredgewidth=0.8, label=str(class_names[1])),
+         mlines.Line2D([], [], color=_SVM_PALETTE["boundary"], linewidth=2.2,
+                       label="Decision boundary (f(x) = 0)"),
+         mlines.Line2D([], [], color=_SVM_PALETTE["blue_main"], linestyle="--", linewidth=1.6,
+                       label="Margin (f(x) = -1)"),
+         mlines.Line2D([], [], color=_SVM_PALETTE["red_strong"], linestyle="--", linewidth=1.6,
+                       label="Margin (f(x) = +1)"),
+      ]
+      if distinguish_sv:
+         handles.extend([
+            mlines.Line2D([], [], linestyle="None", marker="o", markersize=10,
+                          markerfacecolor="none", markeredgecolor=_SVM_PALETTE["highlight"],
+                          markeredgewidth=2.2, label="Margin SV (0 < alpha < C)"),
+            mlines.Line2D([], [], linestyle="None", marker="o", markersize=9,
+                          markerfacecolor="none", markeredgecolor=_SVM_PALETTE["bounded_sv"],
+                          markeredgewidth=1.2, label="Bounded SV (alpha = C)"),
+         ])
+      else:
+         handles.append(
+            mlines.Line2D([], [], linestyle="None", marker="o", markersize=9.5,
+                          markerfacecolor="none", markeredgecolor=_SVM_PALETTE["boundary"],
+                          markeredgewidth=1.5, label="Support vector")
+         )
+      return handles
+
+   def visualize_boundary(
+      self,
+      X,
+      y,
+      *,
+      ax=None,
+      feature_names=None,
+      class_names=None,
+      title=None,
+      grid_resolution=250,
+      pad_ratio=0.08,
+      distinguish_sv=True,
+      show_legend=True,
+      filename="output/svm_boundary.png",
+      save_to_file=False,
+      formats=("png",),
+      dpi=300,
+   ):
+      """Plot 2D decision boundary f(x)=0, margins f(x)=±1, and support vectors."""
+      if self.classes is None or self.support_vectors is None or self.alpha is None:
+         raise ValueError("Model has not been fitted yet.")
+
+      X_arr = np.asarray(X, dtype=np.float64)
+      y_arr = np.asarray(y)
+      if X_arr.ndim != 2 or X_arr.shape[1] != 2:
+         raise ValueError(f"Expected 2D input with 2 features, got shape {X_arr.shape}.")
+      if len(X_arr) != len(y_arr):
+         raise ValueError("X and y must have the same number of samples.")
+      if self.support_vectors.shape[1] != 2:
+         raise ValueError(
+            f"Model was fitted on {self.support_vectors.shape[1]} features; expected 2."
+         )
+
+      feat_x, feat_y = feature_names if feature_names is not None else ("Feature 0", "Feature 1")
+      cls_names = (
+         tuple(class_names)
+         if class_names is not None
+         else (f"Class {self.classes[0]}", f"Class {self.classes[1]}")
+      )
+
+      x_min, x_max = float(X_arr[:, 0].min()), float(X_arr[:, 0].max())
+      y_min, y_max = float(X_arr[:, 1].min()), float(X_arr[:, 1].max())
+      x_pad = pad_ratio * (x_max - x_min) if x_max > x_min else 1.0
+      y_pad = pad_ratio * (y_max - y_min) if y_max > y_min else 1.0
+
+      xx, yy = np.meshgrid(
+         np.linspace(x_min - x_pad, x_max + x_pad, grid_resolution),
+         np.linspace(y_min - y_pad, y_max + y_pad, grid_resolution),
+      )
+      zz = self.decision_function(np.c_[xx.ravel(), yy.ravel()]).reshape(xx.shape)
+
+      own_fig = ax is None
+      with _svm_style_context():
+         if own_fig:
+            fig, ax = plt.subplots(figsize=(7.5, 5.5))
+         else:
+            fig = ax.figure
+
+         z_low = min(float(zz.min()) - 1.0, -1.0)
+         z_high = max(float(zz.max()) + 1.0, 1.0)
+         ax.contourf(
+            xx,
+            yy,
+            zz,
+            levels=[z_low, 0.0, z_high],
+            colors=[_SVM_PALETTE["blue_secondary"], _SVM_PALETTE["red_2"]],
+            alpha=0.18,
+            extend="both",
+         )
+
+         z_min_grid, z_max_grid = float(zz.min()), float(zz.max())
+         for level, color, ls, lw in [
+            (-1.0, _SVM_PALETTE["blue_main"], "--", 1.6),
+            (0.0, _SVM_PALETTE["boundary"], "-", 2.2),
+            (1.0, _SVM_PALETTE["red_strong"], "--", 1.6),
+         ]:
+            if z_min_grid < level < z_max_grid:
+               ax.contour(xx, yy, zz, levels=[level], colors=[color], linestyles=[ls], linewidths=[lw])
+
+         mask_neg = y_arr == self.classes[0]
+         mask_pos = y_arr == self.classes[1]
+         ax.scatter(
+            X_arr[mask_neg, 0],
+            X_arr[mask_neg, 1],
+            c=_SVM_PALETTE["blue_main"],
+            s=36,
+            alpha=0.82,
+            edgecolors="white",
+            linewidths=0.6,
+            zorder=3,
+         )
+         ax.scatter(
+            X_arr[mask_pos, 0],
+            X_arr[mask_pos, 1],
+            c=_SVM_PALETTE["red_strong"],
+            s=36,
+            alpha=0.82,
+            edgecolors="white",
+            linewidths=0.6,
+            zorder=3,
+         )
+
+         free_mask, bounded_mask = self._sv_masks()
+         if distinguish_sv:
+            if np.any(bounded_mask):
+               ax.scatter(
+                  self.support_vectors[bounded_mask, 0],
+                  self.support_vectors[bounded_mask, 1],
+                  s=80,
+                  facecolors="none",
+                  edgecolors=_SVM_PALETTE["bounded_sv"],
+                  linewidths=1.0,
+                  alpha=0.75,
+                  zorder=4,
+               )
+            if np.any(free_mask):
+               ax.scatter(
+                  self.support_vectors[free_mask, 0],
+                  self.support_vectors[free_mask, 1],
+                  s=155,
+                  facecolors="none",
+                  edgecolors=_SVM_PALETTE["boundary"],
+                  linewidths=2.4,
+                  zorder=5,
+               )
+               ax.scatter(
+                  self.support_vectors[free_mask, 0],
+                  self.support_vectors[free_mask, 1],
+                  s=130,
+                  facecolors="none",
+                  edgecolors=_SVM_PALETTE["highlight"],
+                  linewidths=1.8,
+                  zorder=6,
+               )
+         else:
+            ax.scatter(
+               self.support_vectors[:, 0],
+               self.support_vectors[:, 1],
+               s=100,
+               facecolors="none",
+               edgecolors=_SVM_PALETTE["boundary"],
+               linewidths=1.3,
+               zorder=4,
+            )
+
+         ax.set_xlabel(feat_x)
+         ax.set_ylabel(feat_y)
+         ax.set_xlim(x_min - x_pad, x_max + x_pad)
+         ax.set_ylim(y_min - y_pad, y_max + y_pad)
+         ax.spines["top"].set_visible(False)
+         ax.spines["right"].set_visible(False)
+
+         if title is None:
+            title = f"SVM ({self.kernel}) | SV: {len(self.support_vectors)} ({int(free_mask.sum())} margin)"
+         ax.set_title(title, pad=10)
+
+         if show_legend:
+            ax.legend(
+               handles=self._legend_handles(cls_names, distinguish_sv=distinguish_sv),
+               loc="best",
+               frameon=False,
+               fontsize=10,
+            )
+
+         if own_fig:
+            fig.tight_layout(pad=1.0)
+            if save_to_file:
+               _save_figure(fig, filename, formats=formats, dpi=dpi)
+            plt.close(fig)
+            return fig
+
+      return ax
+
 class SVC(BaseModel):
    def __init__(
       self,
@@ -447,3 +701,91 @@ class SVC(BaseModel):
       
       else: 
          return self.classes[np.argmax(z, axis=1)]
+
+   def visualize_boundary(self, X, y, **kwargs):
+      if self.classes is None or self.estimators is None:
+         raise ValueError("Model has not been fitted yet.")
+      if len(self.classes) != 2:
+         raise ValueError("visualize_boundary only supports binary classification.")
+      return self.estimators[0][2].visualize_boundary(X, y, **kwargs)
+
+
+def visualize_svm_kernels(
+   models,
+   X,
+   y,
+   *,
+   feature_names=None,
+   class_names=("Not Canceled (0)", "Canceled (1)"),
+   grid_resolution=250,
+   pad_ratio=0.08,
+   distinguish_sv=True,
+   filename="output/svm_kernels_2d_boundary.png",
+   save_to_file=True,
+   formats=("png",),
+   dpi=300,
+):
+   items = list(models.items()) if isinstance(models, dict) else list(models)
+   if not items:
+      raise ValueError("models must contain at least one fitted SVM model.")
+
+   X_arr = np.asarray(X, dtype=np.float64)
+   y_arr = np.asarray(y)
+
+   with _svm_style_context():
+      fig, axes = plt.subplots(
+         1,
+         len(items),
+         figsize=(6.0 * len(items), 5.8),
+         sharex=True,
+         sharey=True,
+      )
+      axes_arr = np.atleast_1d(axes).flatten()
+
+      legend_handles = None
+      for idx, ((label, model), ax) in enumerate(zip(items, axes_arr)):
+         est = model.estimators[0][2] if isinstance(model, SVC) else model
+         if not isinstance(est, BinarySVC) or est.classes is None:
+            raise ValueError(f"Model '{label}' must be a fitted binary SVC/BinarySVC.")
+
+         acc = float(np.mean(model.predict(X_arr) == y_arr))
+         free_mask, _ = est._sv_masks()
+         panel_title = (
+            f"{label}\n"
+            f"Acc: {acc:.1%} | SV: {len(est.support_vectors)} ({int(free_mask.sum())} margin)"
+         )
+         est.visualize_boundary(
+            X_arr,
+            y_arr,
+            ax=ax,
+            feature_names=feature_names,
+            class_names=class_names,
+            title=panel_title,
+            grid_resolution=grid_resolution,
+            pad_ratio=pad_ratio,
+            distinguish_sv=distinguish_sv,
+            show_legend=False,
+            save_to_file=False,
+         )
+         if idx > 0:
+            ax.set_ylabel("")
+         if legend_handles is None:
+            legend_handles = est._legend_handles(class_names, distinguish_sv=distinguish_sv)
+
+      if legend_handles:
+         fig.legend(
+            handles=legend_handles,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=4,
+            frameon=False,
+            fontsize=11.5,
+            columnspacing=1.6,
+            handletextpad=0.6,
+         )
+
+      fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.87))
+      if save_to_file:
+         _save_figure(fig, filename, formats=formats, dpi=dpi)
+      plt.close(fig)
+      return fig
