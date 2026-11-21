@@ -1,3 +1,12 @@
+"""
+k-Nearest Neighbors (KNN) classifier implementation from scratch.
+
+References:
+- E. Ferdian, "kNN," IF3170 Inteligensi Artifisial, Edunex ITB, 2026.
+- P. Cunningham and S. J. Delany, "k-Nearest Neighbour Classifiers: 2nd Edition
+  (with Python examples)," arXiv:2004.04523, 2020.
+"""
+
 import numpy as np
 try:
     from .base import BaseModel

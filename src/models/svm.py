@@ -1,3 +1,26 @@
+"""
+Support Vector Machine (SVC / BinarySVC) classifier from scratch.
+
+Trained using Sequential Minimal Optimization (SMO) with Second-Order Working
+Set Selection (WSS2) and an LRU kernel-column cache (LIBSVM-style), supporting
+Linear, Polynomial, Gaussian (RBF), and Sigmoid kernels, as well as OvO and OvR
+multiclass strategies.
+
+References:
+- F. Z. Ruskanda, "Support Vector Machines," IF3170 Inteligensi Artifisial,
+  Edunex ITB, 2026.
+- J. C. Platt, "Fast Training of Support Vector Machines using Sequential
+  Minimal Optimization," in Advances in Kernel Methods - Support Vector
+  Learning, MIT Press, 1999.
+- R.-E. Fan, P.-H. Chen, and C.-J. Lin, "Working Set Selection Using Second
+  Order Information for Training Support Vector Machines," Journal of Machine
+  Learning Research (JMLR), vol. 6, pp. 1889-1918, 2005 (LIBSVM WSS2 & kernel
+  column caching).
+- C.-W. Hsu and C.-J. Lin, "A Comparison of Methods for Multiclass Support
+  Vector Machines," IEEE Transactions on Neural Networks, vol. 13, no. 2,
+  pp. 415-425, 2002 (One-vs-One and One-vs-Rest strategies).
+"""
+
 import numpy as np
 from collections import OrderedDict
 try:

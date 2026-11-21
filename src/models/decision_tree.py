@@ -1,3 +1,22 @@
+"""
+Decision Tree Learning (ID3 / C4.5 / CART) classifier from scratch.
+
+Supports categorical and continuous features, fractional sample weighting for
+missing values (C4.5), vectorized prefix-sum continuous threshold search, and
+tree visualization with top-N depth truncation.
+
+References:
+- N. U. Maulidevi, "Decision Tree" & "Issues in Decision Tree," IF3170
+  Inteligensi Artifisial, Edunex ITB, 2026.
+- J. R. Quinlan, "C4.5: Programs for Machine Learning," Morgan Kaufmann, 1993
+  (Gain Ratio, fractional sample weights for missing attribute values).
+- J. R. Quinlan, "Improved Use of Continuous Attributes in C4.5," Journal of
+  Artificial Intelligence Research (JAIR), vol. 4, pp. 77-90, 1996
+  (mean-gain threshold filtering for continuous splits).
+- L. Breiman et al., "Classification and Regression Trees," Wadsworth, 1984
+  (Gini impurity criterion).
+"""
+
 import numpy as np
 import numbers
 import os
@@ -527,7 +546,6 @@ class DecisionTree(BaseModel):
         return probs / total if total > 0 else probs
 
     def visualize_tree(self, filename="decision_tree.png", save_to_file=False, top_n=None, feature_names=None):
-        """Plot the decision tree up to `top_n` branching levels using matplotlib."""
         if self.root is None:
             raise ValueError("Model has not been fitted yet.")
         if top_n is not None and (isinstance(top_n, bool) or not isinstance(top_n, (int, np.integer)) or top_n < 0):

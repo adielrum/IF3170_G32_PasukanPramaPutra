@@ -1,3 +1,16 @@
+"""
+Naive Bayes classifier from scratch with quantile binning for continuous
+features, Laplace (additive) smoothing, and missing value handling.
+
+References:
+- N. U. Maulidevi, "Bayes Net," IF3170 Inteligensi Artifisial, Edunex ITB, 2024.
+- T. M. Mitchell, "Machine Learning," McGraw-Hill, 1997 (Naive Bayes &
+  Laplace/m-estimate smoothing).
+- C. D. Manning, P. Raghavan, and H. Schutze, "Introduction to Information
+  Retrieval," Cambridge University Press, 2008, Ch. 13 (log-space Naive Bayes
+  with additive smoothing).
+"""
+
 import numpy as np 
 
 try:
