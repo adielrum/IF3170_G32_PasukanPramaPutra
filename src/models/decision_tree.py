@@ -53,10 +53,12 @@ class DecisionTree(BaseModel):
         self.root = None
         self.classes = None
         self.categories = {}
+        self.feature_names = None
 
     def fit(self, X, y):
 
         # Convert categorical_features to indices
+        self.feature_names = list(X.columns) if hasattr(X, 'columns') else None
         if hasattr(X, 'columns') and self.categorical_features:
             col_list = list(X.columns)
             self.categorical_features = [
@@ -513,135 +515,75 @@ class DecisionTree(BaseModel):
 
         return result
 
-    def visualize_tree(self, filename="decision_tree", save_to_file=False):
-            if self.root is None:
-                raise ValueError("Model has not been fitted yet.")
-    
-            positions = {}
-            num_leaves, max_depth = self._compute_tree_layout(self.root, positions=positions)
-    
-            fig_width = max(8.0, num_leaves * 2.6)
-            fig_height = max(5.0, (max_depth + 1) * 2.3)
-    
-            rc_style = {
-                "font.family": ["Arial", "sans-serif"],
-                "font.size": 11,
-                "axes.spines.right": False,
-                "axes.spines.top": False,
-                "axes.linewidth": 2.0,
-                "legend.frameon": False,
-                "svg.fonttype": "none",
-            }
-    
-            with plt.rc_context(rc_style):
-                fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-                ax.set_axis_off()
-                ax.set_xlim(-0.7, max(0.7, (num_leaves - 1) + 0.7))
-                ax.set_ylim(-0.6, max(0.6, max_depth + 0.6))
-    
-                self._draw_tree_nodes(ax, self.root, positions, max_depth)
-                fig.tight_layout(pad=1.5)
-    
-                if save_to_file:
-                    base, ext = os.path.splitext(filename)
-                    parent_dir = os.path.dirname(filename)
-                    if parent_dir:
-                        os.makedirs(parent_dir, exist_ok=True)
-    
-                    if ext:
-                        fig.savefig(filename, dpi=300, bbox_inches="tight", pad_inches=0.2)
-                        if ext.lower() != ".png":
-                            fig.savefig(f"{base}.png", dpi=300, bbox_inches="tight", pad_inches=0.2)
-                    else:
-                        fig.savefig(f"{base}.png", dpi=300, bbox_inches="tight", pad_inches=0.2)
-    
-                plt.close(fig)
-                return fig
-
-    def _compute_tree_layout(self, node, depth=0, next_leaf_x=0, positions=None):
-        if positions is None:
-            positions = {}
-
+    def _subtree_probs(self, node):
         if node.is_leaf or not node.children:
-            positions[id(node)] = (float(next_leaf_x), depth)
-            return next_leaf_x + 1, depth
+            return np.asarray(node.probs, dtype=np.float64)
+        probs = np.zeros(len(self.classes), dtype=np.float64)
+        for key, child in node.children.items():
+            p = (node.children_probs or {}).get(key, 0.0)
+            if p > 0.0:
+                probs += p * self._subtree_probs(child)
+        total = probs.sum()
+        return probs / total if total > 0 else probs
 
-        child_xs = []
-        max_depth = depth
-        for child_node in node.children.values():
-            next_leaf_x, child_max_depth = self._compute_tree_layout(
-                child_node, depth + 1, next_leaf_x, positions
-            )
-            child_xs.append(positions[id(child_node)][0])
-            max_depth = max(max_depth, child_max_depth)
+    def visualize_tree(self, filename="decision_tree.png", save_to_file=False, top_n=None, feature_names=None):
+        """Plot the decision tree up to `top_n` branching levels using matplotlib."""
+        if self.root is None:
+            raise ValueError("Model has not been fitted yet.")
+        if top_n is not None and (isinstance(top_n, bool) or not isinstance(top_n, (int, np.integer)) or top_n < 0):
+            raise ValueError("top_n must be a non-negative integer or None.")
 
-        positions[id(node)] = (0.5 * (child_xs[0] + child_xs[-1]), depth)
-        return next_leaf_x, max_depth
+        names = feature_names if feature_names is not None else getattr(self, "feature_names", None)
+        pos, next_x, max_d = {}, [0.0], [0]
 
-    def _format_leaf_label(self, node):
-        if self.classes is not None and node.probs is not None:
-            prob_parts = [f"{cls}: {prob:.2f}" for cls, prob in zip(self.classes, node.probs)]
-            lines = [", ".join(prob_parts[i:i + 2]) for i in range(0, len(prob_parts), 2)]
-            return f"Leaf: {node.value}\n" + "\n".join(lines)
-        return f"Leaf: {node.value}"
+        def layout(node, d=0):
+            max_d[0] = max(max_d[0], d)
+            if node.is_leaf or not node.children or (top_n is not None and d >= top_n):
+                pos[id(node)] = (next_x[0], d)
+                next_x[0] += 1.0
+                return pos[id(node)][0]
+            xs = [layout(c, d + 1) for c in node.children.values()]
+            pos[id(node)] = (0.5 * (xs[0] + xs[-1]), d)
+            return pos[id(node)][0]
 
-    @staticmethod
-    def _format_edge_label(node, child_key):
-        prob = node.children_probs[child_key]
-        if node.threshold is not None:
-            op = "<" if child_key == "left" else "≥"
-            cond = f"{op} {node.threshold:.4g}"
-        else:
-            cond = f"= {child_key}"
-        return f"{cond}\n(p={prob:.2f})"
+        layout(self.root)
+        n_leaves, max_depth = max(1, int(next_x[0])), max_d[0]
+        fig, ax = plt.subplots(figsize=(max(6, n_leaves * 2.2), max(4, (max_depth + 1) * 2.0)))
+        ax.set_axis_off()
 
-    def _draw_tree_nodes(self, ax, node, positions, max_depth):
-        nx, ndepth = positions[id(node)]
-        ny = max_depth - ndepth
+        def draw(node, d=0):
+            x, y = pos[id(node)][0], max_depth - d
+            truncated = not node.is_leaf and bool(node.children) and top_n is not None and d >= top_n
+            if not node.is_leaf and node.children and not truncated:
+                n_ch = len(node.children)
+                for i, (key, child) in enumerate(node.children.items()):
+                    cx, cy = pos[id(child)][0], max_depth - (d + 1)
+                    ax.plot([x, cx], [y, cy], "k-", lw=1)
+                    t = 0.5 if n_ch <= 2 else (0.45 if i % 2 == 0 else 0.65)
+                    cond = f"{'<' if key == 'left' else '>='} {node.threshold:.3g}" if node.threshold is not None else f"= {key}"
+                    ax.text(x + t * (cx - x), y + t * (cy - y), f"{cond}\n({node.children_probs[key]:.2f})",
+                            ha="center", va="center", fontsize=8, bbox=dict(fc="white", ec="none"))
+                    draw(child, d + 1)
 
-        if not node.is_leaf and node.children:
-            num_children = len(node.children)
-            for idx, (child_key, child_node) in enumerate(node.children.items()):
-                cx, cdepth = positions[id(child_node)]
-                cy = max_depth - cdepth
+            if node.is_leaf or not node.children:
+                lbl, fc = f"Leaf: {node.value}", "lightgreen"
+            elif truncated:
+                pred = self.classes[int(np.argmax(self._subtree_probs(node)))]
+                lbl, fc = f"...\n(pred: {pred})", "lightgray"
+            else:
+                feat = names[node.feature] if names is not None and node.feature < len(names) else f"Feature {node.feature}"
+                lbl, fc = feat, "lightblue"
+            ax.text(x, y, lbl, ha="center", va="center", fontsize=9, bbox=dict(boxstyle="round", fc=fc, ec="black"))
 
-                ax.plot([nx, cx], [ny, cy], color="#4D4D4D", linewidth=1.8, zorder=1)
-                
-                t = 0.55 if num_children <= 2 else (0.50 if idx % 2 == 0 else 0.68)
-                lx = nx + t * (cx - nx)
-                ly = ny + t * (cy - ny)
-                ax.text(
-                    lx,
-                    ly,
-                    self._format_edge_label(node, child_key),
-                    ha="center",
-                    va="center",
-                    fontsize=9.5,
-                    color="#272727",
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.92),
-                    zorder=2,
-                )
-
-                self._draw_tree_nodes(ax, child_node, positions, max_depth)
-
-        if node.is_leaf:
-            label = self._format_leaf_label(node)
-            bbox = dict(boxstyle="round,pad=0.45", facecolor="#DDF3DE", edgecolor="#42949E", linewidth=1.8)
-            weight = "normal"
-        else:
-            label = f"Feature {node.feature}"
-            bbox = dict(boxstyle="round,pad=0.45", facecolor="#EEF4FB", edgecolor="#0F4D92", linewidth=2.0)
-            weight = "bold"
-
-        ax.text(
-            nx,
-            ny,
-            label,
-            ha="center",
-            va="center",
-            fontsize=10.5,
-            fontweight=weight,
-            color="#272727",
-            bbox=bbox,
-            zorder=3,
-        )
+        draw(self.root)
+        ax.set_xlim(-0.8, max(0.8, n_leaves - 0.2))
+        ax.set_ylim(-0.6, max_depth + 0.6)
+        plt.tight_layout()
+        if save_to_file:
+            if not os.path.splitext(filename)[1]:
+                filename += ".png"
+            if parent := os.path.dirname(filename):
+                os.makedirs(parent, exist_ok=True)
+            fig.savefig(filename, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        return fig
