@@ -9,6 +9,9 @@ References:
 - C. D. Manning, P. Raghavan, and H. Schutze, "Introduction to Information
   Retrieval," Cambridge University Press, 2008, Ch. 13 (log-space Naive Bayes
   with additive smoothing).
+- H. Zhang and S. Sheng, "Learning Weighted Naive Bayes with Accurate Ranking,"
+  Proc. 4th IEEE International Conference on Data Mining (ICDM), 2004
+  (Mutual Information feature weighting).
 """
 
 import os
@@ -65,9 +68,10 @@ def _save_nb_figure(fig, filename, formats=("png",), dpi=300):
 
 
 class NaiveBayes(BaseModel):
-    def __init__(self, alpha=1.0, n_bins=3):
+    def __init__(self, alpha=1.0, n_bins=3, *, use_feature_weighting=False):
         self.alpha = alpha
         self.n_bins = n_bins
+        self.use_feature_weighting = bool(use_feature_weighting)
 
     @staticmethod
     def is_missing(value):
@@ -165,7 +169,42 @@ class NaiveBayes(BaseModel):
                 counts = self.feature_count_[j][class_index]
                 counts[value] = counts.get(value, 0) + 1
 
+        if self.use_feature_weighting:
+            self.feature_weights_ = self._compute_feature_weights(n_samples)
+        else:
+            self.feature_weights_ = np.ones(n_features, dtype=np.float64)
+
         return self
+
+    def _compute_feature_weights(self, n_samples):
+        """Compute normalized Mutual Information feature weights for Weighted Naive Bayes.
+
+        Reference:
+        H. Zhang & S. Sheng, "Learning Weighted Naive Bayes with Accurate Ranking,"
+        Proceedings of the 4th IEEE International Conference on Data Mining (ICDM), 2004.
+        """
+        n_features = len(self.feature_names_)
+        n_classes = len(self.classes_)
+        mi_scores = np.zeros(n_features, dtype=np.float64)
+
+        for j in range(n_features):
+            mi = 0.0
+            for val in self.feature_values_[j]:
+                val_total = sum(self.feature_count_[j][c].get(val, 0) for c in range(n_classes))
+                if val_total == 0:
+                    continue
+                p_val = val_total / n_samples
+                for c in range(n_classes):
+                    joint_count = self.feature_count_[j][c].get(val, 0)
+                    if joint_count > 0:
+                        p_joint = joint_count / n_samples
+                        mi += p_joint * np.log2(p_joint / (p_val * self.class_prior_[c]))
+            mi_scores[j] = max(0.0, mi)
+
+        mean_mi = float(np.mean(mi_scores))
+        if mean_mi > 0.0:
+            return mi_scores / mean_mi
+        return np.ones(n_features, dtype=np.float64)
 
     def peluang_bersyarat(self, feature_index, class_index, value):
         counts = self.feature_count_[feature_index][class_index]
@@ -189,7 +228,7 @@ class NaiveBayes(BaseModel):
                 for j, feature in enumerate(self.feature_names_):
                     value = self.transform(feature, X[i, j])
                     probability = self.peluang_bersyarat(j, c, value)
-                    score += np.log(probability)
+                    score += self.feature_weights_[j] * np.log(probability)
 
                 log_scores[i, c] = score
 
