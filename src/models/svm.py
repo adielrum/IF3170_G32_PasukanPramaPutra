@@ -1,18 +1,53 @@
 import numpy as np
-import scipy.sparse as sparse
-import clarabel
+from collections import OrderedDict
 try:
    from .base import BaseModel
 except ImportError:
    from base import BaseModel
-   
-# Algoritma SMO: https://cs229.stanford.edu/materials/smo.pdf
-class BinarySVC(BaseModel):
-   def __init__(self, C=1.0, kernel='linear', *, degree=3, gamma="scale", coef0=0.0, tol=1e-6):
-      
-      self.C = C
 
-      if kernel in ['linear', 'poly', 'rbf', 'sigmoid']:
+class _KernelColumnCache:
+   def __init__(self, max_bytes, col_bytes):
+      self.max_cols = max(2, max_bytes // max(col_bytes, 1))
+      self._cache: OrderedDict[int, np.ndarray] = OrderedDict()
+
+   def get(self, idx: int):
+      col = self._cache.get(idx)
+
+      if col is not None:
+         self._cache.move_to_end(idx)
+      
+      return col
+
+   def put(self, idx: int, col: np.ndarray):
+      if idx in self._cache:
+         self._cache.move_to_end(idx)
+         self._cache[idx] = col
+         return
+      
+      if len(self._cache) >= self.max_cols:
+         self._cache.popitem(last=False)
+      
+      self._cache[idx] = col
+
+class BinarySVC(BaseModel):
+   def __init__(
+      self,
+      C=1.0,
+      kernel='linear',
+      *,
+      degree=3,
+      gamma='scale',
+      coef0=0.0,
+      tol=1e-4,
+      solver='smo',
+      max_iter=100000,
+      cache_size=200.0,
+      batch_size=2048,
+   ):
+      
+      self.C = float(C)
+
+      if kernel in ['linear', 'poly', 'polynomial', 'rbf', 'sigmoid']:
          self.kernel = kernel
       else:
          raise ValueError(f"Invalid kernel: {kernel}.")
@@ -21,7 +56,12 @@ class BinarySVC(BaseModel):
       self.gamma = gamma
       self.coef0 = coef0
       self.tol = tol
+      self.solver = solver
+      self.max_iter = max_iter
+      self.cache_size = cache_size
+      self.batch_size = batch_size
 
+      self.classes = None
       self.alpha = None
       self.support_vectors = None
       self.dual_coeffs = None
@@ -29,98 +69,147 @@ class BinarySVC(BaseModel):
       self._gamma = None
    
    def fit(self, X, y):
-      X = np.asarray(X, dtype=np.float64)
+      X = np.ascontiguousarray(X, dtype=np.float64)
       y = np.asarray(y)
 
       if len(np.unique(y)) != 2:
          raise ValueError("BinarySVC is only for binary classification.")
 
+      # Initialize attributes 
       self.classes = np.unique(y)
-      y_signed = np.where(y == self.classes[0], -1, 1)
-      
-      if self.gamma == 'scale':
-         self._gamma = 1.0 / (X.shape[1] * np.var(X)) if np.var(X) > 0 else 1.0
-      
-      elif self.gamma == 'auto':
-         self._gamma = 1.0 / X.shape[1]
-      
-      elif isinstance(self.gamma, (int, float)):
-         self._gamma = float(self.gamma)
-      
-      else:
-         raise ValueError(f"Invalid gamma: {self.gamma}.")
+      y_signed = np.where(y == self.classes[0], -1.0, 1.0)
+      self._gamma = self._resolve_gamma(X)
 
-      K = self._compute_kernel(X, X)
-      alpha = self._solve_qp(K, y_signed)
+      # Solve QP problem  
+      alpha, bias = self._solve_smo(X, y_signed) 
 
-      sv_mask = alpha > self.tol 
-      if not np.any(sv_mask): 
-         raise RuntimeError("No support vectors found.")
+      sv_mask = alpha > min(self.tol, 1e-7, 1e-3 * self.C)
+      if not np.any(sv_mask):
+         raise RuntimeError(
+            f"No support vectors found (max_alpha={alpha.max():.3e}, C={self.C})."
+         ) 
 
-      alpha_sv = alpha[sv_mask]
-      y_sv = y_signed[sv_mask]
-      x_sv = X[sv_mask]
-      K_sv = K[np.ix_(sv_mask, sv_mask)]
-      
-      self.alpha = alpha_sv
-      self.support_vectors = x_sv
-      self.dual_coeffs = alpha_sv * y_sv
-
-      sum_sv = self.dual_coeffs @ K_sv # Σ αᵢ yᵢ K(xᵢ, xⱼ)
-      free_sv_mask = alpha_sv < self.C - self.tol
-
-      if np.any(free_sv_mask):
-         self.bias = float(np.mean(y_sv[free_sv_mask] - sum_sv[free_sv_mask])) # free support vectors  
-      else:
-         self.bias = float(np.mean(y_sv - sum_sv)) # all support vectors
+      # Save solution 
+      self.alpha = alpha[sv_mask]
+      self.support_vectors = X[sv_mask] 
+      self.dual_coeffs = self.alpha * y_signed[sv_mask] 
+      self.bias = float(bias)
 
       return self
    
-   def _solve_qp(self, K, y):
-      N = K.shape[0]
-      y = np.asarray(y, dtype=np.float64)
-
-      # Objective: # 1/2 αᵀ P α + qᵀ α 
-      Q = K * np.outer(y, y)
-      Q = 0.5 * (Q + Q.T)
-      P = sparse.triu(Q, format="csc")
-      q = -np.ones(N, dtype=np.float64)
-
-      # Constraints: Aα + s = b
-      A = sparse.vstack(
-         [
-            sparse.csc_matrix(y.reshape(1, -1)),  # yᵀα + s₁ = 0
-            -sparse.eye(N, format="csc"), # -α + s₂ = 0 
-            sparse.eye(N, format="csc"), # α + s₃ = C 
-         ],
-         format="csc",
-      )
-      b = np.concatenate(
-         [[0.0], 
-         np.zeros(N), 
-         np.full(N, self.C)]
-      )
-      cones = [
-         clarabel.ZeroConeT(1), # s₁ = 0 
-         clarabel.NonnegativeConeT(2 * N) # s₂, s₃ ≥ 0
-      ]
+   def _resolve_gamma(self, X: np.ndarray) -> float:
+      if self.gamma == 'scale':
+         var = float(np.var(X))
+         return 1.0 / (X.shape[1] * var) if var > 0.0 else 1.0
       
-      settings = clarabel.DefaultSettings()
-      settings.verbose = False
-      tol = min(self.tol * 1e-2, 1e-8)
-      settings.tol_gap_abs = tol
-      settings.tol_gap_rel = tol
-      settings.tol_feas = tol
+      if self.gamma == 'auto':
+         return 1.0 / X.shape[1]
+      
+      if isinstance(self.gamma, (int, float)):
+         return float(self.gamma)
+      
+      raise ValueError(f"Invalid gamma: {self.gamma}.")
+   
+   def _solve_smo(self, X: np.ndarray, y: np.ndarray):
+      N = X.shape[0]
+      C = self.C
+      bound_eps = 1e-9 * max(1.0, C)
+      step_eps = 1e-12
 
-      # Solve QP 
-      solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
-      solution = solver.solve()
+      alpha = np.zeros(N, dtype=np.float64)
+      E = -y.copy()
+      diag_K = self._compute_diag(X)
+      cache = _KernelColumnCache(int(self.cache_size * 1024 * 1024), N * 8)
 
-      if solution.status != clarabel.SolverStatus.Solved:
-         raise RuntimeError(f"QP solver failed: {solution.status}")
+      def get_col(idx: int) -> np.ndarray:
+         col = cache.get(idx)
+         if col is None:
+            col = self._compute_kernel(X, X[idx : idx + 1]).ravel()
+            cache.put(idx, col)
+         return col
 
-      alpha = np.asarray(solution.x, dtype=np.float64)
-      return np.clip(alpha, 0.0, self.C)
+      pos_y = y == 1.0
+      neg_y = ~pos_y
+
+      for _ in range(self.max_iter):
+         i_up = (pos_y & (alpha < C - bound_eps)) | (neg_y & (alpha > bound_eps))
+         i_low = (neg_y & (alpha < C - bound_eps)) | (pos_y & (alpha > bound_eps))
+
+         if not (np.any(i_up) and np.any(i_low)):
+            break
+
+         neg_E = -E
+         up_indices = np.flatnonzero(i_up)
+         low_indices = np.flatnonzero(i_low)
+
+         i = int(up_indices[np.argmax(neg_E[up_indices])])
+         max_neg_Ei = neg_E[i]
+         min_neg_Ej = float(np.min(neg_E[low_indices]))
+
+         if max_neg_Ei - min_neg_Ej <= self.tol:
+            break
+
+         K_i = get_col(i)
+
+         # Second-Order Working Set Selection (WSS2)
+         cand_indices = np.flatnonzero(i_low & (neg_E < max_neg_Ei - step_eps))
+         if len(cand_indices) > 0:
+            eta_all = np.maximum(
+               diag_K[i] + diag_K[cand_indices] - 2.0 * K_i[cand_indices],
+               step_eps,
+            )
+            diff = max_neg_Ei - neg_E[cand_indices]
+            j = int(cand_indices[np.argmax((diff * diff) / eta_all)])
+         else:
+            j = int(low_indices[np.argmin(neg_E[low_indices])])
+
+         K_j = get_col(j)
+
+         y_i, y_j = y[i], y[j]
+         a_i_old, a_j_old = alpha[i], alpha[j]
+
+         if y_i != y_j:
+            L = max(0.0, a_j_old - a_i_old)
+            H = min(C, C + a_j_old - a_i_old)
+         else:
+            L = max(0.0, a_i_old + a_j_old - C)
+            H = min(C, a_i_old + a_j_old)
+
+         if H - L <= step_eps:
+            continue
+
+         eta = diag_K[i] + diag_K[j] - 2.0 * K_i[j]
+         if eta > step_eps:
+            a_j_new = a_j_old + y_j * (E[i] - E[j]) / eta
+            a_j_new = float(np.clip(a_j_new, L, H))
+         else:
+            a_j_new = L if (y_j * (E[i] - E[j]) < 0.0) else H
+
+         if abs(a_j_new - a_j_old) < step_eps * (a_j_new + a_j_old + step_eps):
+            continue
+
+         a_i_new = a_i_old + (y_i * y_j) * (a_j_old - a_j_new)
+
+         alpha[i] = a_i_new
+         alpha[j] = a_j_new
+
+         delta_i = y_i * (a_i_new - a_i_old)
+         delta_j = y_j * (a_j_new - a_j_old)
+         E += delta_i * K_i + delta_j * K_j
+
+      sv_tol = 1e-7 * max(1.0, C)
+      free_mask = (alpha > sv_tol) & (alpha < C - sv_tol)
+      if np.any(free_mask):
+         bias = -float(np.mean(E[free_mask]))
+      else:
+         i_up = (pos_y & (alpha < C - bound_eps)) | (neg_y & (alpha > bound_eps))
+         i_low = (neg_y & (alpha < C - bound_eps)) | (pos_y & (alpha > bound_eps))
+         neg_E = -E
+         b_low = float(np.max(neg_E[i_up])) if np.any(i_up) else 0.0
+         b_high = float(np.min(neg_E[i_low])) if np.any(i_low) else 0.0
+         bias = 0.5 * (b_low + b_high)
+
+      return np.clip(alpha, 0.0, C), bias
 
    def _compute_kernel(self, X1, X2):
       if self._gamma is None:
@@ -131,12 +220,15 @@ class BinarySVC(BaseModel):
          case 'linear':
             return X1 @ X2.T
 
-         case 'poly':
+         case 'poly' | 'polynomial':
             return (self._gamma * (X1 @ X2.T) + self.coef0) ** self.degree
 
          case 'rbf':
-            norm_sq = np.sum(X1**2, axis=1, keepdims=True) + np.sum(X2**2, axis=1) - 2.0 * (X1 @ X2.T) # ||x - z||² = ||x||² + ||z||² - 2 xᵀ z
-            return np.exp(-self._gamma * np.maximum(norm_sq, 0.0))
+            x1_sq = np.sum(X1 ** 2, axis=1, keepdims=True)
+            x2_sq = np.sum(X2 ** 2, axis=1, keepdims=True).T
+            norm_sq = x1_sq + x2_sq - 2.0 * (X1 @ X2.T) # ||x - z||² = ||x||² + ||z||² - 2 xᵀ z
+            np.maximum(norm_sq, 0.0, out=norm_sq)
+            return np.exp(-self._gamma * norm_sq)
 
          case 'sigmoid':
             return np.tanh(self._gamma * (X1 @ X2.T) + self.coef0)
@@ -144,28 +236,66 @@ class BinarySVC(BaseModel):
          case _:
             raise ValueError(f"Invalid kernel: {self.kernel}.")
 
+   def _compute_diag(self, X):
+      match self.kernel:
+
+         case 'linear':
+            return np.sum(X ** 2, axis=1)
+         
+         case 'poly' | 'polynomial':
+            return (self._gamma * np.sum(X ** 2, axis=1) + self.coef0) ** self.degree
+         
+         case 'rbf':
+            return np.ones(X.shape[0], dtype=np.float64)
+         
+         case 'sigmoid':
+            return np.tanh(self._gamma * np.sum(X ** 2, axis=1) + self.coef0)
+         
+         case _:
+            raise ValueError(f"Invalid kernel: {self.kernel}.")
+
    def decision_function(self, X):
-      if self.alpha is None or self.support_vectors is None or self.dual_coeffs is None or self.bias is None:
+      if self.support_vectors is None or self.dual_coeffs is None or self.bias is None or self.batch_size is None:
          raise ValueError("Model has not been fitted yet.")
 
       X = np.asarray(X, dtype=np.float64)
-      K = self._compute_kernel(self.support_vectors, X)
-      return self.dual_coeffs @ K + self.bias
+      M = X.shape[0] 
+      z = np.empty(M, dtype=np.float64)
+
+      for start in range(0, M, self.batch_size):
+         end = min(start + self.batch_size, M)
+         K_batch = self._compute_kernel(self.support_vectors, X[start:end])
+         z[start:end] = self.dual_coeffs @ K_batch + self.bias
+
+      return z
 
    def predict(self, X):
-      if self.alpha is None or self.support_vectors is None or self.dual_coeffs is None or self.bias is None:
+      if self.classes is None:
          raise ValueError("Model has not been fitted yet.")
 
       z = self.decision_function(X)
       return np.where(z >= 0, self.classes[1], self.classes[0])
 
 class SVC(BaseModel):
-
-   def __init__(self, C=1.0, kernel='linear', multiclass='ovo', *, degree=3, gamma="scale", coef0=0.0, tol=1e-6):
+   def __init__(
+      self,
+      C=1.0,
+      kernel='linear',
+      multiclass='ovo',
+      *,
+      degree=3,
+      gamma='scale',
+      coef0=0.0,
+      tol=1e-6,
+      solver='smo',
+      max_iter=100000,
+      cache_size=200.0,
+      batch_size=2048,
+   ):
       
       self.C = C
 
-      if kernel in ['linear', 'polynomial', 'rbf', 'sigmoid']:
+      if kernel in ['linear', 'poly', 'polynomial', 'rbf', 'sigmoid']:
          self.kernel = kernel
       else:
          raise ValueError(f"Invalid kernel: {kernel}.")
@@ -179,18 +309,26 @@ class SVC(BaseModel):
       self.gamma = gamma
       self.coef0 = coef0
       self.tol = tol
+      self.solver = solver
+      self.max_iter = max_iter
+      self.cache_size = cache_size
+      self.batch_size = batch_size
 
       self.classes = None
       self.estimators = None
 
    def _make_binary_svc(self):
       return BinarySVC(
-         C=self.C,
-         kernel=self.kernel,
-         degree=self.degree,
-         gamma=self.gamma,
-         coef0=self.coef0,
-         tol=self.tol,
+            C=self.C,
+            kernel=self.kernel,
+            degree=self.degree,
+            gamma=self.gamma,
+            coef0=self.coef0,
+            tol=self.tol,
+            solver=self.solver,
+            max_iter=self.max_iter,
+            cache_size=self.cache_size,
+            batch_size=self.batch_size,
       )
 
    def fit(self, X, y):

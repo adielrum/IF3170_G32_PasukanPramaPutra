@@ -36,6 +36,7 @@ class DecisionTree(BaseModel):
         use_gain_ratio=True,
         max_depth=100,
         min_samples_split=2,
+        min_samples_leaf=1,
         categorical_features=None,
     ):
         if criterion not in ("gini", "entropy"):
@@ -45,11 +46,25 @@ class DecisionTree(BaseModel):
         self.use_gain_ratio = bool(use_gain_ratio)
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
         self.categorical_features = categorical_features
 
         self.root = None
         self.classes = None
         self.categories = {}
+
+    def fit(self, X, y):
+        X_clean, is_num = self._prepare_X(X) 
+        self._is_numeric_matrix = is_num 
+        y = np.asarray(y)
+
+        self.classes, y_indices = np.unique(y, return_inverse=True)
+        self.categories = self._infer_feature_types(X_clean)
+
+        initial_weights = np.ones(len(y_indices), dtype=float)
+        self.root = self._build_tree(X_clean, y_indices, initial_weights, depth=0)
+
+        return self
     
     @staticmethod
     def _is_null_value(x):
@@ -61,9 +76,20 @@ class DecisionTree(BaseModel):
 
     @classmethod
     def _is_null(cls, arr):
+        if np.issubdtype(arr.dtype, np.number):
+            return np.isnan(arr)
         return np.array([cls._is_null_value(x) for x in arr], dtype=bool)
 
+    def _prepare_X(self, X):
+        X_arr = np.asarray(X)
+        if np.issubdtype(X_arr.dtype, np.number) and not self.categorical_features:
+            return np.ascontiguousarray(X_arr, dtype=np.float64), True
+        return np.asarray(X, dtype=object), False
+
     def _infer_feature_types(self, X):
+        if self._is_numeric_matrix:
+            return {}
+        
         num_features = X.shape[1]
         categories = {}
 
@@ -104,9 +130,10 @@ class DecisionTree(BaseModel):
         unique_labels = np.unique(y_indices[weights > 0])
 
         # Stopping criteria
+        min_split_weight = max(self.min_samples_split, 2 * self.min_samples_leaf)
         if len(unique_labels) <= 1:
             return self._create_leaf(y_indices, weights)
-        if total_weight < self.min_samples_split or depth >= self.max_depth:
+        if total_weight < min_split_weight or depth >= self.max_depth:
             return self._create_leaf(y_indices, weights)
 
         # Select best split
@@ -116,27 +143,37 @@ class DecisionTree(BaseModel):
             return self._create_leaf(y_indices, weights)
 
         # Separate known and unknown values 
-        null_mask = self._is_null(X[:, best_feature])
+        col = X[:, best_feature]
+        null_mask = self._is_null(col)
         known_mask = ~null_mask
         known_weight = np.sum(weights[known_mask])
 
-        is_categorical = best_feature in self.categories
-
         # Categorical feature branching
-        if is_categorical:
+        if best_feature in self.categories:
             child_masks = {
-                val: known_mask & (X[:, best_feature] == val) 
+                val: known_mask & (col == val)
                 for val in self.categories[best_feature]
             }
 
         # Continuous feature branching
         else:
-            col_known = np.zeros(len(X), dtype=float)
-            col_known[known_mask] = X[known_mask, best_feature].astype(float)
-            child_masks = {
-                "left": known_mask & (col_known < best_threshold),
-                "right": known_mask & (col_known >= best_threshold),
-            }
+            if best_threshold is None:
+                raise ValueError(
+                    f"Continuous feature {best_feature} returned threshold=None."
+                )
+
+            if self._is_numeric_matrix:
+                child_masks = {
+                    "left": known_mask & (col < best_threshold),
+                    "right": known_mask & (col >= best_threshold),
+                }
+            else:
+                col_known = np.zeros(len(X), dtype=np.float64)
+                col_known[known_mask] = col[known_mask].astype(np.float64)
+                child_masks = {
+                    "left": known_mask & (col_known < best_threshold),
+                    "right": known_mask & (col_known >= best_threshold),
+                }
 
         # Calculate weights 
         children = {}
@@ -150,7 +187,7 @@ class DecisionTree(BaseModel):
                 children[child_key] = self._create_leaf(y_indices, weights)
             else:
                 active_mask = child_mask | null_mask 
-                child_weights = weights[active_mask].copy() # parent row weights  
+                child_weights = weights[active_mask].copy() # parent row weights 
                 child_nulls = null_mask[active_mask] 
                 child_weights[child_nulls] *= p_child # updated row weights  
 
@@ -168,18 +205,19 @@ class DecisionTree(BaseModel):
             threshold=best_threshold,
         )
 
-    def _impurity_from_probs(self, probs):
-        probs = probs[probs > 0]
-        if len(probs) == 0:
-            return 0.0
+    def _impurity_from_probs(self, probs, axis=-1):
+        probs = np.asarray(probs, dtype=np.float64)
+        safe_probs = np.where(probs > 0.0, probs, 1.0)
 
         match self.criterion:
             case "entropy":
-                return -np.sum(probs * np.log2(probs))
+                imp = -np.sum(np.where(probs > 0.0, probs * np.log2(safe_probs), 0.0), axis=axis)
             case "gini":
-                return 1.0 - np.sum(probs ** 2)
+                imp = 1.0 - np.sum(probs ** 2, axis=axis)
             case _:
                 raise ValueError(f"Invalid criterion: {self.criterion}.")
+
+        return float(imp) if np.ndim(imp) == 0 else imp
 
     def _impurity(self, y_indices, weights):
         if self.classes is None:
@@ -191,61 +229,118 @@ class DecisionTree(BaseModel):
 
         return self._impurity_from_probs(probs)
 
-    def _gain(self, y_known, w_known, child_masks, w_unknown):
-        w_known_total = np.sum(w_known)
-        w_total = w_known_total + w_unknown
+    def _gain(
+        self,
+        parent_probs,
+        child_class_weights,
+        W_known,
+        w_unknown=0.0,
+        *,
+        filter_mean_gain=False,
+    ):
+        child_class_weights = np.asarray(child_class_weights, dtype=np.float64)
+        S = child_class_weights.shape[0]
+        W_tot = W_known + w_unknown
 
         # L(S)
-        parent_impurity = self._impurity(y_known, w_known) 
+        parent_imp = self._impurity_from_probs(parent_probs)
+
+        # |Sᵥ|/|S| for every v
+        child_weights = np.sum(child_class_weights, axis=-1)
+        safe_child_weights = np.where(child_weights > 0.0, child_weights, 1.0)
+
+        # L(Sᵥ) for every v
+        child_probs = child_class_weights / safe_child_weights[..., None]
+        child_imps = self._impurity_from_probs(child_probs, axis=-1) 
 
         # Σᵥ |Sᵥ|/|S| L(Sᵥ) 
-        child_weights = np.array([np.sum(w_known[mask]) for mask in child_masks], dtype=float)
-        child_impurity = 0.0 
-        for mask, w_child in zip(child_masks, child_weights):
-            if w_child > 0:
-                child_impurity += (w_child / w_known_total) * self._impurity(y_known[mask], w_known[mask])
-
-        # L(S) + Σᵥ |Sᵥ|/|S| L(Sᵥ) 
-        gain = (w_known_total / w_total) * (parent_impurity - child_impurity)
-        if gain <= 0:
-            return 0.0
+        weighted_child_imp = np.sum((child_weights / W_known) * child_imps, axis=-1)
 
         # Gain 
+        gains = (W_known / W_tot) * (parent_imp - weighted_child_imp)
         if not self.use_gain_ratio:
-            return gain
+            return np.maximum(gains, 0.0)
 
-        # Split Impurity 
-        partition_weights = np.append(child_weights, w_unknown) if w_unknown > 0 else child_weights
-        split_impurity = self._impurity_from_probs(partition_weights / w_total)
+        # Split impurity 
+        p_parts = [child_weights / W_tot]
+        if w_unknown > 0.0:
+            p_parts.append(np.full((S, 1), w_unknown / W_tot, dtype=np.float64))
+        split_imp = self._impurity_from_probs(np.concatenate(p_parts, axis=-1), axis=-1)
 
-        if split_impurity <= 1e-12:
-            return 0.0
+        valid = (gains > 1e-12) & (split_imp > 1e-12)
+        if filter_mean_gain and np.any(gains > 1e-12):
+            mean_gain = float(np.mean(gains[gains > 1e-12]))
+            valid &= gains >= mean_gain - 1e-12
 
         # Gain Ratio 
-        return gain / split_impurity
+        safe_split_imp = np.where(valid, split_imp, 1.0)
+        gain_ratios = np.where(valid, gains / safe_split_imp, 0.0)
+        return gain_ratios
 
     def _best_continuous_split(self, col_known, y_known, w_known, w_unknown):
-        unique_vals = np.unique(col_known[w_known > 0])
-        if len(unique_vals) < 2:
+        if self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+
+        pos_w = w_known > 0.0
+        col_known, y_known, w_known = col_known[pos_w], y_known[pos_w], w_known[pos_w]
+
+        m = len(col_known)
+        if m < 2:
             return 0.0, None
 
-        thresholds = 0.5 * (unique_vals[:-1] + unique_vals[1:])
-        best_score = 0.0
-        best_thresh = None
+        # Sort vavlues to candidate thresholds  
+        order = np.argsort(col_known, kind="mergesort")
+        x_s, y_s, w_s = col_known[order], y_known[order], w_known[order]
 
-        for t in thresholds:
+        valid_splits = np.flatnonzero(x_s[:-1] < x_s[1:])
+        if len(valid_splits) == 0:
+            return 0.0, None
 
-            left_mask = col_known < t
-            right_mask = ~left_mask
-            score = self._gain(y_known, w_known, [left_mask, right_mask], w_unknown)
+        # Precompute weights at each possible splits 
+        W_mat = np.zeros((m, len(self.classes)), dtype=np.float64)
+        W_mat[np.arange(m), y_s] = w_s
 
-            if score > best_score:
-                best_score = score
-                best_thresh = t
+        cum_W = np.cumsum(W_mat[:-1], axis=0)
+        total_W_class = cum_W[-1] + W_mat[-1]
+        W_known = float(np.sum(total_W_class))
 
-        return best_score, best_thresh
+        left_W = cum_W[valid_splits]
+        right_W = total_W_class - left_W
+        w_left = np.sum(left_W, axis=1)
+        w_right = W_known - w_left
+
+        # Enforce min_samples_leaf 
+        min_leaf = max(1e-12, float(self.min_samples_leaf))
+        feasible = (w_left >= min_leaf) & (w_right >= min_leaf)
+        if not np.any(feasible):
+            return 0.0, None
+
+        valid_splits = valid_splits[feasible]
+        w_left, w_right = w_left[feasible], w_right[feasible]
+
+        child_class_weights = np.stack([left_W[feasible], right_W[feasible]], axis=1)
+        parent_probs = total_W_class / W_known
+
+        scores = self._gain(
+            parent_probs,
+            child_class_weights,
+            W_known,
+            w_unknown,
+            filter_mean_gain=True,
+        )
+
+        best_idx = int(np.argmax(scores))
+        best_score = float(scores[best_idx])
+        if best_score <= 0.0:
+            return 0.0, None
+
+        k = int(valid_splits[best_idx])
+        return best_score, float(0.5 * (x_s[k] + x_s[k + 1]))
 
     def _best_split(self, X, y_indices, weights):
+        if self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+
         num_features = X.shape[1]
         best_score = 0.0
         best_feature = None
@@ -257,7 +352,7 @@ class DecisionTree(BaseModel):
             known_mask = ~null_mask
 
             w_known = weights[known_mask]
-            if np.sum(w_known) <= 0:
+            if np.sum(w_known) <= 0.0:
                 continue
 
             y_known = y_indices[known_mask]
@@ -265,16 +360,37 @@ class DecisionTree(BaseModel):
 
             # Categorical feature
             if j in self.categories:
-
                 col_known = col[known_mask]
-                child_masks = [col_known == val for val in self.categories[j]]
-                score = self._gain(y_known, w_known, child_masks, w_unknown)
+                cat_vals = self.categories[j]
+                K = len(self.classes)
+
+                branch_W = np.array([
+                    np.bincount(
+                        y_known[col_known == val],
+                        weights=w_known[col_known == val],
+                        minlength=K,
+                    )
+                    for val in cat_vals
+                ], dtype=np.float64,)[None, :, :]
+
+                if np.sum(np.sum(branch_W[0], axis=-1) >= self.min_samples_leaf) < 2:
+                    continue
+
+                W_known = float(np.sum(w_known))
+                parent_probs = np.sum(branch_W[0], axis=0) / W_known
+                score = float(self._gain(parent_probs, branch_W, W_known, w_unknown)[0])
                 threshold = None
 
             # Continuous feature
             else:
-                col_known = col[known_mask].astype(float)
-                score, threshold = self._best_continuous_split(col_known, y_known, w_known, w_unknown)
+                col_known = (
+                    col[known_mask]
+                    if self._is_numeric_matrix
+                    else col[known_mask].astype(np.float64)
+                )
+                score, threshold = self._best_continuous_split(
+                    col_known, y_known, w_known, w_unknown
+                )
 
             if score > best_score:
                 best_score = score
@@ -283,67 +399,78 @@ class DecisionTree(BaseModel):
 
         return best_feature, best_threshold
 
-    def fit(self, X, y):
-        X = np.asarray(X, dtype=object)
-        y = np.asarray(y)
-
-        self.classes, y_indices = np.unique(y, return_inverse=True)
-        self.categories = self._infer_feature_types(X)
-
-        initial_weights = np.ones(len(y_indices), dtype=float)
-        self.root = self._build_tree(X, y_indices, initial_weights, depth=0)
-
-        return self
-
-    def predict_proba(self, X):
-        if self.root is None or self.classes is None:
-            raise ValueError("Model has not been fitted yet.")
-
-        X = np.asarray(X, dtype=object)
-        if len(X) == 0:
-            return np.empty((0, len(self.classes)), dtype=float)
-
-        return np.array([self._predict_sample_proba(sample, self.root) for sample in X], dtype=float)
-
     def predict(self, X):
         if self.classes is None:
             raise ValueError("Model has not been fitted yet.")
         
         proba = self.predict_proba(X)
         return self.classes[np.argmax(proba, axis=1)]
+    
+    def _predict_batch(self, X, row_indices, node, out, is_numeric, weight=1.0):
+        if len(row_indices) == 0:
+            return
 
-    def _marginal_child_proba(self, sample, node):
-        if self.classes is None:
-            raise ValueError("Model has not been fitted yet.")
-        
-        total_probs = np.zeros(len(self.classes), dtype=float)
-        for child_key, child_node in node.children.items():
-            p_child = node.children_probs[child_key]
-            if p_child > 0:
-                total_probs += p_child * self._predict_sample_proba(sample, child_node)
-        return total_probs 
-
-    def _predict_sample_proba(self, sample, node):
         if node.is_leaf:
-            return node.probs
+            out[row_indices] += weight * node.probs
+            return
 
-        val = sample[node.feature]
+        col = X[row_indices, node.feature]
+        null_mask = self._is_null(col)
 
-        # Missing value 
-        if self._is_null_value(val):
-            return self._marginal_child_proba(sample, node) 
+        # Missing values
+        if np.any(null_mask):
+            null_rows = row_indices[null_mask]
+            for child_key, child_node in node.children.items():
+                p_child = node.children_probs[child_key]
+                if p_child > 0.0:
+                    self._predict_batch(X, null_rows, child_node, out, is_numeric, weight * p_child)
+
+        known_mask = ~null_mask
+        if not np.any(known_mask):
+            return
+
+        known_rows = row_indices[known_mask]
+        known_vals = col[known_mask]
 
         # Continuous split 
         if node.threshold is not None:
-            child_key = "left" if float(val) < node.threshold else "right"
-            return self._predict_sample_proba(sample, node.children[child_key])
+            vals_float = (
+                known_vals if is_numeric else known_vals.astype(np.float64)
+            )
+            go_left = vals_float < node.threshold
+            self._predict_batch(X, known_rows[go_left], node.children["left"], out, is_numeric, weight)
+            self._predict_batch(X, known_rows[~go_left], node.children["right"], out, is_numeric, weight)
+            return
 
         # Categorical split 
-        if val in node.children:
-            return self._predict_sample_proba(sample, node.children[val])
+        unseen_mask = np.ones(len(known_rows), dtype=bool)
+        for child_key, child_node in node.children.items():
+            match_mask = known_vals == child_key
+            if np.any(match_mask):
+                unseen_mask &= ~match_mask
+                self._predict_batch(
+                    X, known_rows[match_mask], child_node, out, is_numeric, weight
+                )
 
-        # Fallback
-        return self._marginal_child_proba(sample, node)
+        if np.any(unseen_mask):
+            unseen_rows = known_rows[unseen_mask]
+            for child_key, child_node in node.children.items():
+                p_child = node.children_probs[child_key]
+                if p_child > 0.0:
+                    self._predict_batch(X, unseen_rows, child_node, out, is_numeric, weight * p_child)
+
+    def predict_proba(self, X):
+        if self.root is None or self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+
+        X_clean, is_num = self._prepare_X(X)
+        n_samples = len(X_clean)
+        out = np.zeros((n_samples, len(self.classes)), dtype=np.float64)
+        if n_samples == 0:
+            return out
+
+        self._predict_batch(X_clean, np.arange(n_samples), self.root, out, is_num, weight=1.0)
+        return out
 
     def __str__(self):
         return self._print_tree(self.root)

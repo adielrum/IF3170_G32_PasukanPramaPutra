@@ -39,8 +39,6 @@ class LogisticRegression(BaseModel):
         return self._softmax(z)
 
     def fit(self, X, y):
-        # Main source: https://web.stanford.edu/~jurafsky/slp3/old_dec20/5.pdf 
-
         num_samples, num_features = X.shape
         num_classes = len(np.unique(y))
         rng = np.random.default_rng(self.random_state)

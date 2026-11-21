@@ -1,8 +1,10 @@
-pandas
 numpy
+pandas
 scipy
 scikit-learn
+imbalanced-learn
+joblib
 matplotlib
+seaborn
 plotly
 ipykernel
-clarabel
