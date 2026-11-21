@@ -13,6 +13,8 @@ References:
   2025, https://dsplog.com/2025/06/22/gradients-for-multi-class-classification-with-softmax/
 - M. Brenndoerfer, "Elastic Net Regularization: Math & Python," Machine Learning
   from Scratch, 2025, https://mbrenndoerfer.com/writing/elastic-net-regularization-complete-guide-mathematical-foundations-python-implementation
+- D. P. Kingma & J. Ba, "Adam: A Method for Stochastic Optimization," ICLR 2015,
+  https://arxiv.org/abs/1412.6980
 """
 
 import os
@@ -26,7 +28,23 @@ except ImportError:
     from base import BaseModel
 
 class LogisticRegression(BaseModel):
-    def __init__(self, learning_rate=0.01, num_iterations=1000, batch_size=None, *, l1_lambda=0.0, l2_lambda=0.0, random_state=None):
+    def __init__(
+        self,
+        learning_rate=0.01,
+        num_iterations=1000,
+        batch_size=None,
+        *,
+        l1_lambda=0.0,
+        l2_lambda=0.0,
+        optimizer="sgd",
+        beta1=0.9,
+        beta2=0.999,
+        eps=1e-8,
+        random_state=None,
+    ):
+        if optimizer not in ("sgd", "adam"):
+            raise ValueError(f"Invalid optimizer: {optimizer}. Choose 'sgd' or 'adam'.")
+
         self.learning_rate = learning_rate
         self.num_iterations = num_iterations
         self.batch_size = batch_size
@@ -37,6 +55,10 @@ class LogisticRegression(BaseModel):
 
         self.l1_lambda = l1_lambda
         self.l2_lambda = l2_lambda
+        self.optimizer = optimizer
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
 
         self.random_state = random_state
 
@@ -96,6 +118,14 @@ class LogisticRegression(BaseModel):
         self.weights = np.zeros((num_features, num_classes), dtype=np.float64)
         self.bias = np.zeros(num_classes, dtype=np.float64)
 
+        # Adam optimizer state (Kingma & Ba, ICLR 2015)
+        if self.optimizer == "adam":
+            m_w = np.zeros_like(self.weights)
+            v_w = np.zeros_like(self.weights)
+            m_b = np.zeros_like(self.bias)
+            v_b = np.zeros_like(self.bias)
+            t = 0
+
         if record_history:
             self.history = {
                 "weights": [self.weights.copy()],
@@ -110,7 +140,7 @@ class LogisticRegression(BaseModel):
             X_shuffled = X[indices]
             y_shuffled = y_reshaped[indices]
 
-            # Mini-Batch Gradient Descent 
+            # Mini-Batch Gradient Descent / Adam
             for j in range(0, num_samples, batch_size):
                 X_batch = X_shuffled[j:j+batch_size]
                 y_batch = y_shuffled[j:j+batch_size]
@@ -126,8 +156,26 @@ class LogisticRegression(BaseModel):
                 dl1 = self.l1_lambda * np.sign(self.weights) # L1  
                 dl2 = self.l2_lambda * self.weights # L2  
 
-                self.weights -= self.learning_rate * (dw + dl1 + dl2) 
-                self.bias -= self.learning_rate * db
+                grad_w = dw + dl1 + dl2
+                grad_b = db
+
+                if self.optimizer == "adam":
+                    t += 1
+                    m_w = self.beta1 * m_w + (1.0 - self.beta1) * grad_w
+                    v_w = self.beta2 * v_w + (1.0 - self.beta2) * (grad_w ** 2)
+                    m_b = self.beta1 * m_b + (1.0 - self.beta1) * grad_b
+                    v_b = self.beta2 * v_b + (1.0 - self.beta2) * (grad_b ** 2)
+
+                    m_w_hat = m_w / (1.0 - self.beta1 ** t)
+                    v_w_hat = v_w / (1.0 - self.beta2 ** t)
+                    m_b_hat = m_b / (1.0 - self.beta1 ** t)
+                    v_b_hat = v_b / (1.0 - self.beta2 ** t)
+
+                    self.weights -= self.learning_rate * m_w_hat / (np.sqrt(v_w_hat) + self.eps)
+                    self.bias -= self.learning_rate * m_b_hat / (np.sqrt(v_b_hat) + self.eps)
+                else:
+                    self.weights -= self.learning_rate * grad_w
+                    self.bias -= self.learning_rate * grad_b
 
             if record_history:
                 self.history["weights"].append(self.weights.copy())
