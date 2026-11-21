@@ -14,7 +14,7 @@ References:
   Artificial Intelligence Research (JAIR), vol. 4, pp. 77-90, 1996
   (mean-gain threshold filtering for continuous splits).
 - L. Breiman et al., "Classification and Regression Trees," Wadsworth, 1984
-  (Gini impurity criterion).
+  (Gini impurity criterion & Minimal Cost-Complexity Pruning / ccp_alpha).
 """
 
 import numpy as np
@@ -36,6 +36,10 @@ class Node:
         *,
         value=None,
         probs=None,
+        impurity=0.0,
+        weight=0.0,
+        majority_value=None,
+        majority_probs=None,
     ):
         self.feature = feature
         self.children = children 
@@ -43,6 +47,10 @@ class Node:
         self.threshold = threshold
         self.value = value
         self.probs = probs
+        self.impurity = impurity
+        self.weight = weight
+        self.majority_value = majority_value
+        self.majority_probs = majority_probs
 
     @property
     def is_leaf(self):
@@ -58,9 +66,12 @@ class DecisionTree(BaseModel):
         min_samples_split=2,
         min_samples_leaf=1,
         categorical_features=None,
+        ccp_alpha=0.0,
     ):
         if criterion not in ("gini", "entropy"):
             raise ValueError(f"Invalid criterion: {criterion}")
+        if ccp_alpha < 0.0:
+            raise ValueError(f"ccp_alpha must be non-negative, got {ccp_alpha}.")
 
         self.criterion = criterion
         self.use_gain_ratio = bool(use_gain_ratio)
@@ -68,6 +79,7 @@ class DecisionTree(BaseModel):
         self.min_samples_split = min_samples_split
         self.min_samples_leaf = min_samples_leaf
         self.categorical_features = categorical_features
+        self.ccp_alpha = float(ccp_alpha)
 
         self.root = None
         self.classes = None
@@ -95,6 +107,9 @@ class DecisionTree(BaseModel):
 
         initial_weights = np.ones(len(y_indices), dtype=float)
         self.root = self._build_tree(X_clean, y_indices, initial_weights, depth=0)
+
+        if self.ccp_alpha > 0.0 and self.root is not None:
+            self._prune_ccp(self.root, total_weight=float(np.sum(initial_weights)))
 
         return self
     
@@ -160,12 +175,13 @@ class DecisionTree(BaseModel):
 
         N = len(self.classes)
         weighted_counts = np.bincount(y_indices, weights=weights, minlength=N)
-        total_counts = np.sum(weighted_counts)
+        total_counts = float(np.sum(weighted_counts))
 
         probs = weighted_counts / total_counts 
         majority = self.classes[np.argmax(weighted_counts)]
+        impurity = float(self._loss_from_probs(probs))
 
-        return Node(value=majority, probs=probs)
+        return Node(value=majority, probs=probs, impurity=impurity, weight=total_counts)
 
     def _build_tree(self, X, y_indices, weights, depth=0):
         total_weight = np.sum(weights)
@@ -240,12 +256,73 @@ class DecisionTree(BaseModel):
                     depth + 1,
                 )
 
+        weighted_counts = np.bincount(y_indices, weights=weights, minlength=len(self.classes))
+        node_probs = weighted_counts / total_weight
+        node_majority = self.classes[np.argmax(weighted_counts)]
+        node_impurity = float(self._loss_from_probs(node_probs))
+
         return Node(
             feature=best_feature,
             children=children,
             children_probs=children_probs,
             threshold=best_threshold,
+            impurity=node_impurity,
+            weight=float(total_weight),
+            majority_value=node_majority,
+            majority_probs=node_probs,
         )
+
+    def _prune_ccp(self, root, total_weight):
+        """Minimal Cost-Complexity Pruning (weakest-link post-pruning).
+
+        Iteratively collapses the internal node with the smallest effective
+        alpha = (R(t) - R(T_t)) / (|T_t| - 1) while alpha <= self.ccp_alpha,
+        where R(t) = (w_t / W) * impurity(t).
+
+        Reference:
+        L. Breiman, J. H. Friedman, R. A. Olshen, & C. J. Stone,
+        "Classification and Regression Trees (CART)," Wadsworth, 1984.
+        """
+        if total_weight <= 0.0:
+            return
+
+        while not root.is_leaf:
+            best_node = None
+            best_alpha = float("inf")
+
+            def traverse(node):
+                nonlocal best_node, best_alpha
+                r_node = (node.weight / total_weight) * node.impurity
+                if node.is_leaf or not node.children:
+                    return r_node, 1
+
+                r_subtree = 0.0
+                n_leaves = 0
+                for child in node.children.values():
+                    r_c, l_c = traverse(child)
+                    r_subtree += r_c
+                    n_leaves += l_c
+
+                if n_leaves > 1:
+                    alpha_eff = max(0.0, (r_node - r_subtree) / (n_leaves - 1))
+                    if alpha_eff < best_alpha:
+                        best_alpha = alpha_eff
+                        best_node = node
+
+                return r_subtree, n_leaves
+
+            traverse(root)
+
+            if best_node is None or best_alpha > self.ccp_alpha:
+                break
+
+            # Collapse weakest link into a leaf node
+            best_node.value = best_node.majority_value
+            best_node.probs = best_node.majority_probs
+            best_node.children = None
+            best_node.children_probs = None
+            best_node.feature = None
+            best_node.threshold = None
 
     def _loss_from_probs(self, probs, axis=-1):
         probs = np.asarray(probs, dtype=np.float64)
