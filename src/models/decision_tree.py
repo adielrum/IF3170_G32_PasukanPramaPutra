@@ -184,6 +184,9 @@ class DecisionTree(BaseModel):
         return Node(value=majority, probs=probs, impurity=impurity, weight=total_counts)
 
     def _build_tree(self, X, y_indices, weights, depth=0):
+        if self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
+
         total_weight = np.sum(weights)
         unique_labels = np.unique(y_indices[weights > 0])
 
@@ -612,6 +615,8 @@ class DecisionTree(BaseModel):
         return result
 
     def _subtree_probs(self, node):
+        if self.classes is None:
+            raise ValueError("Model has not been fitted yet.")
         if node.is_leaf or not node.children:
             return np.asarray(node.probs, dtype=np.float64)
         probs = np.zeros(len(self.classes), dtype=np.float64)
@@ -623,7 +628,7 @@ class DecisionTree(BaseModel):
         return probs / total if total > 0 else probs
 
     def visualize_tree(self, filename="decision_tree.png", save_to_file=False, top_n=None, feature_names=None):
-        if self.root is None:
+        if self.root is None or self.classes is None:
             raise ValueError("Model has not been fitted yet.")
         if top_n is not None and (isinstance(top_n, bool) or not isinstance(top_n, (int, np.integer)) or top_n < 0):
             raise ValueError("top_n must be a non-negative integer or None.")
@@ -647,6 +652,8 @@ class DecisionTree(BaseModel):
         ax.set_axis_off()
 
         def draw(node, d=0):
+            if self.classes is None:
+                raise ValueError("Model has not been fitted yet.")
             x, y = pos[id(node)][0], max_depth - d
             truncated = not node.is_leaf and bool(node.children) and top_n is not None and d >= top_n
             if not node.is_leaf and node.children and not truncated:

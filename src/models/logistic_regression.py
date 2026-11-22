@@ -69,12 +69,16 @@ class LogisticRegression(BaseModel):
         return exp_z / np.sum(exp_z, axis=1, keepdims=True)
 
     def _compute_log_loss(self, X, y_onehot):
+        if self.weights is None:
+            raise ValueError("Model has not been fitted yet.")
+        
         probs = np.clip(self.predict_proba(X), 1e-15, 1.0)
         ce_loss = -np.mean(np.sum(y_onehot * np.log(probs), axis=1))
         reg_loss = (
             self.l1_lambda * np.sum(np.abs(self.weights))
             + 0.5 * self.l2_lambda * np.sum(self.weights ** 2)
         )
+
         return float(ce_loss + reg_loss)
 
     def predict(self, X):
@@ -119,12 +123,14 @@ class LogisticRegression(BaseModel):
         self.bias = np.zeros(num_classes, dtype=np.float64)
 
         # Adam optimizer state (Kingma & Ba, ICLR 2015)
+        t = 0
         if self.optimizer == "adam":
             m_w = np.zeros_like(self.weights)
             v_w = np.zeros_like(self.weights)
             m_b = np.zeros_like(self.bias)
             v_b = np.zeros_like(self.bias)
-            t = 0
+        else:
+            m_w = v_w = m_b = v_b = np.empty(0, dtype=np.float64)
 
         if record_history:
             self.history = {
@@ -177,7 +183,7 @@ class LogisticRegression(BaseModel):
                     self.weights -= self.learning_rate * grad_w
                     self.bias -= self.learning_rate * grad_b
 
-            if record_history:
+            if record_history and self.history is not None:
                 self.history["weights"].append(self.weights.copy())
                 self.history["bias"].append(self.bias.copy())
                 self.history["loss"].append(self._compute_log_loss(X, y_reshaped))
@@ -216,6 +222,7 @@ class LogisticRegression(BaseModel):
         losses = np.asarray(self.history["loss"], dtype=np.float64)     # (T,)
 
         # Extract effective binary parameter trajectory (theta_0, theta_1)
+        x0 = np.empty(0, dtype=np.float64)
         if param_mode == "intercept_weight":
             f0 = feature_indices[0] if isinstance(feature_indices, (tuple, list)) else int(feature_indices)
             theta0_hist = b_hist[:, 1] - b_hist[:, 0]
@@ -331,7 +338,8 @@ class LogisticRegression(BaseModel):
             ax_c.clabel(cs, inline=True, fontsize=8.5, fmt="%.3f")
             cbar = fig.colorbar(cf, ax=ax_c, pad=0.02)
             cbar.set_label("Log-Loss", fontsize=12)
-            cbar.outline.set_linewidth(1.2)
+            for spine in cbar.ax.spines.values():
+                spine.set_linewidth(1.2)
 
             ax_c.scatter(
                 [theta0_hist[0]], [theta1_hist[0]],
@@ -374,7 +382,7 @@ class LogisticRegression(BaseModel):
             ax_l.legend(frameon=False, loc="upper right", fontsize=10.5)
 
             status_text = fig.suptitle("", fontsize=12.5, fontweight="bold", y=0.99)
-            fig.tight_layout(rect=[0, 0, 1, 0.94], pad=1.4)
+            fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94), pad=1.4)
 
             def update(frame_pos):
                 idx = int(frame_indices[frame_pos])

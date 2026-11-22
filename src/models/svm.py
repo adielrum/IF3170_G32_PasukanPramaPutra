@@ -187,10 +187,19 @@ class BinarySVC(BaseModel):
       diag_K = self._compute_diag(X)
       cache = _KernelColumnCache(int(self.cache_size * 1024 * 1024), N * 8)
 
+      is_rbf = (self.kernel == 'rbf')
+      X_norm_sq = np.sum(X ** 2, axis=1) if is_rbf else None
+      gamma = self._gamma if self._gamma is not None else 1.0
+
       def get_col(idx: int) -> np.ndarray:
          col = cache.get(idx)
          if col is None:
-            col = self._compute_kernel(X, X[idx : idx + 1]).ravel()
+            if is_rbf and X_norm_sq is not None:
+               dists = X_norm_sq + X_norm_sq[idx] - 2.0 * (X @ X[idx])
+               np.maximum(dists, 0.0, out=dists)
+               col = np.exp(-gamma * dists)
+            else:
+               col = self._compute_kernel(X, X[idx : idx + 1]).ravel()
             cache.put(idx, col)
          return col
 
@@ -343,6 +352,9 @@ class BinarySVC(BaseModel):
       return np.where(z >= 0, self.classes[1], self.classes[0])
 
    def _sv_masks(self):
+      if self.alpha is None:
+         raise ValueError("Model has not been fitted yet.")
+      
       sv_tol = max(1e-7, 1e-5 * self.C)
       free_mask = (self.alpha > sv_tol) & (self.alpha < self.C - sv_tol)
       bounded_mask = ~free_mask
@@ -744,8 +756,13 @@ def visualize_svm_kernels(
 
       legend_handles = None
       for idx, ((label, model), ax) in enumerate(zip(items, axes_arr)):
-         est = model.estimators[0][2] if isinstance(model, SVC) else model
-         if not isinstance(est, BinarySVC) or est.classes is None:
+         if isinstance(model, SVC):
+            if model.estimators is None or len(model.estimators) == 0:
+                  raise ValueError(f"SVC model '{label}' has not been fitted yet.")
+            est = model.estimators[0][2]
+         else:
+            est = model
+         if not isinstance(est, BinarySVC) or est.classes is None or est.support_vectors is None:
             raise ValueError(f"Model '{label}' must be a fitted binary SVC/BinarySVC.")
 
          acc = float(np.mean(model.predict(X_arr) == y_arr))
