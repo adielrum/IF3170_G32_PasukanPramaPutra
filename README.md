@@ -19,9 +19,9 @@
 
 Di sini, kami membuat package yang memuat beberapa algoritma _supervised learning_ klasik untuk masalah klasifikasi. Package ini meliputi meliputi algoritma $k$-_nearest neighbor_, _decision tree_, _logistic regression_, _support vector machine_, dan _naive bayes_. Implementasi modular berbasis kelas, menyerupai `scikit-learn`, sehingga penggunaannya mudah tetapi sangat _customizable_.
 
-Selanjutnya, kami juga menerapkan package ini dalam menyelesaikan masalah klasifikasi biner pembatalan pemesanan hotel. Dataset diambil dari [kaggle](https://www.kaggle.com/competitions/T2-IF3170-2026-2027/overview). Dilakukan _exploratory data analysis_, pengolahan data (berupa _cleaning_, _transformation_, _selection_, dan _dimensionality reduction_), pemodelan (dengan setiap algoritma klasik yang telah dibuat), dan validasi.
+Selanjutnya, kami juga menerapkan package ini dalam menyelesaikan masalah klasifikasi biner pembatalan pemesanan hotel. Dataset diambil dari kaggle [Tugas Besar 2 IF3170](https://www.kaggle.com/competitions/T2-IF3170-2026-2027/overview). Dilakukan _exploratory data analysis_, pengolahan data (berupa _cleaning_, _transformation_, _selection_, dan _dimensionality reduction_), pemodelan (dengan setiap algoritma klasik yang telah dibuat), dan validasi.
 
-Untuk melihat analisis lanjut mengenai implementasi package from scratch dan hasil penerapannya pada masalah klasifikasi aktual, dapat dicek laporan di [docs/IF3170_G32_PasukanPramaPutra](./docs/IF3170_G32_PasukanPramaPutra.pdf).
+Untuk melihat analisis lanjut mengenai implementasi package from scratch dan hasil penerapannya pada masalah klasifikasi aktual, dapat dicek laporan di [IF3170_G32_PasukanPramaPutra.pdf](./docs/IF3170_G32_PasukanPramaPutra.pdf).
 
 ---
 
@@ -59,7 +59,7 @@ IF3170_G32_PasukanPramaPutra/
 │   │  ├── logistic-regression.py
 │   │  ├── svm.py
 │   │  └── naive-bayes.py
-│   ├── eda.ipynb
+│   ├─ eda.ipynb
 │   └─ main.ipynb
 └── README.md
 ```
@@ -153,7 +153,7 @@ Algoritma _support vector machine_ memiliki hyperparameter utama regularisasi $C
 ```python
 from models.svm import SVC
 
-svc = SVC(C=1.0, kernel="rbf")
+svc = SVC(C=1.0, kernel="linear")
 
 svc.fit(X_train, y_train)
 y_test = svc.predict(X_test)
@@ -166,7 +166,7 @@ Algoritma _naive bayes_ memiliki hyperparameter utama _Laplace smoothing_ $\alph
 ```python
 from models.naive_bayes import NaiveBayes
 
-nb = NaiveBayes()
+nb = NaiveBayes(alpha=1.0, n_bins=3)
 
 nb.fit(X_train, y_train)
 y_test = nb.predict(X_test)
@@ -190,7 +190,7 @@ Bukti dapat dilihat dari sejarah _commits_.
 
 ## 🔗 Tautan
 
-- 📂 [Repository GitHub](https://https://github.com/adielrum/IF3170_G42_PasukanPramaPutra)
+- 📂 [Repository GitHub](https://github.com/adielrum/IF3170_G32_PasukanPramaPutra)
 
 ---
 
