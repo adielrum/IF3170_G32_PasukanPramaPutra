@@ -105,7 +105,6 @@ class BinarySVC(BaseModel):
       gamma='scale',
       coef0=0.0,
       tol=1e-4,
-      solver='smo',
       max_iter=100000,
       cache_size=200.0,
       batch_size=2048,
@@ -122,7 +121,6 @@ class BinarySVC(BaseModel):
       self.gamma = gamma
       self.coef0 = coef0
       self.tol = tol
-      self.solver = solver
       self.max_iter = max_iter
       self.cache_size = cache_size
       self.batch_size = batch_size
@@ -576,7 +574,6 @@ class SVC(BaseModel):
       gamma='scale',
       coef0=0.0,
       tol=1e-6,
-      solver='smo',
       max_iter=100000,
       cache_size=200.0,
       batch_size=2048,
@@ -598,7 +595,6 @@ class SVC(BaseModel):
       self.gamma = gamma
       self.coef0 = coef0
       self.tol = tol
-      self.solver = solver
       self.max_iter = max_iter
       self.cache_size = cache_size
       self.batch_size = batch_size
@@ -608,16 +604,15 @@ class SVC(BaseModel):
 
    def _make_binary_svc(self):
       return BinarySVC(
-            C=self.C,
-            kernel=self.kernel,
-            degree=self.degree,
-            gamma=self.gamma,
-            coef0=self.coef0,
-            tol=self.tol,
-            solver=self.solver,
-            max_iter=self.max_iter,
-            cache_size=self.cache_size,
-            batch_size=self.batch_size,
+         C=self.C,
+         kernel=self.kernel,
+         degree=self.degree,
+         gamma=self.gamma,
+         coef0=self.coef0,
+         tol=self.tol,
+         max_iter=self.max_iter,
+         cache_size=self.cache_size,
+         batch_size=self.batch_size,
       )
 
    def fit(self, X, y):

@@ -21,7 +21,7 @@ Di sini, kami membuat package yang memuat beberapa algoritma _supervised learnin
 
 Selanjutnya, kami juga menerapkan package ini dalam menyelesaikan masalah klasifikasi biner pembatalan pemesanan hotel. Dataset diambil dari [kaggle](https://www.kaggle.com/competitions/T2-IF3170-2026-2027/overview). Dilakukan _exploratory data analysis_, pengolahan data (berupa _cleaning_, _transformation_, _selection_, dan _dimensionality reduction_), pemodelan (dengan setiap algoritma klasik yang telah dibuat), dan validasi.
 
-Untuk melihat analisis lanjut mengenai implementasi package from scratch dan hasil penerapannya pada masalah klasifikasi aktual, dapat dicek laporan di [docs/IF3170_G32_PasukanPramaPutra](./docs/IF3170_G32_PasukanPramaPutra).
+Untuk melihat analisis lanjut mengenai implementasi package from scratch dan hasil penerapannya pada masalah klasifikasi aktual, dapat dicek laporan di [docs/IF3170_G32_PasukanPramaPutra](./docs/IF3170_G32_PasukanPramaPutra.pdf).
 
 ---
 
