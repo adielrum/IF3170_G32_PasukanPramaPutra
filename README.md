@@ -1,10 +1,17 @@
 <div align="center">
 
-# Local Search
+# Supervised Learning
 
-![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
-![Plotly](https://img.shields.io/badge/Plotly-6.3-blue?logo=plotly&logoColor=white)
-![Matplotlib](https://img.shields.io/badge/Matplotlib-3.10-11557c?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-2.2-013243?logo=numpy&logoColor=white)
+![Pandas](https://img.shields.io/badge/Pandas-2.3-150458?logo=pandas&logoColor=white)
+![SciPy](https://img.shields.io/badge/SciPy-1.17-8CAAE6?logo=scipy&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-1.8-F7931E?logo=scikitlearn&logoColor=white)
+![imbalanced-learn](https://img.shields.io/badge/imbalanced--learn-0.14-00897B?logo=python&logoColor=white)
+![joblib](https://img.shields.io/badge/joblib-1.5-4B8BBE?logo=python&logoColor=white)
+![Matplotlib](https://img.shields.io/badge/Matplotlib-3.10-11557c?logo=matplotlib&logoColor=white)
+![cloudpickle](https://img.shields.io/badge/cloudpickle-3.1-6E4C8E?logo=python&logoColor=white)
+![ipykernel](https://img.shields.io/badge/ipykernel-6.29-F37626?logo=jupyter&logoColor=white)
 
 </div>
 
