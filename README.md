@@ -178,8 +178,8 @@ y_test = nb.predict(X_test)
 
 | Nama                   | NIM      | Pembagian Tugas                                                            |
 | ---------------------- | -------- | -------------------------------------------------------------------------- |
-| Adiel Rum              | 10123004 | kNN, optimisasi, bonus, laporan                                            |
-| Timothy Niels Ruslim   | 10123053 | decision tree, logistic regression, SVM, laporan                           |
+| Adiel Rum              | 10123004 | kNN, optimisasi model, spesifikasi bonus, laporan                          |
+| Timothy Niels Ruslim   | 10123053 | base class, decision tree, logistic regression, SVM, laporan               |
 | Qodri Azkarayan        | 10823501 | naive bayes, laporan                                                       |
 | Mohammad Najmutstsaqib | 13223040 | EDA, data preprocessing, pengujian model, improvement, submission, laporan |
 | Hafizh Hananta Akbari  | 13522132 | –                                                                          |
