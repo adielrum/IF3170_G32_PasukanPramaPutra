@@ -1,6 +1,4 @@
 __pycache__/
 *.py[cod]
-docs/
 .vscode/
 .venv/
-docs/spesifikasi.md
